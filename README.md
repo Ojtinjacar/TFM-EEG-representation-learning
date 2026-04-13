@@ -1,4 +1,4 @@
-# CL-DaSCI-CIMCYC
+# RL-DaSCI-CIMCYC
 
 Representation learning on Developmental Infant EEG. A collaboration between [DaSCI](https://dasci.es/) and [CIMCYC](https://cimcyc.ugr.es/).
 
