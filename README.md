@@ -1,6 +1,6 @@
 # CL-DaSCI-CIMCYC
 
-Self-supervised representation learning on paediatric resting-state EEG for characterising child cognitive development. A collaboration between [DaSCI](https://dasci.es/) and [CIMCYC](https://cimcyc.ugr.es/).
+Representation learning on Developmental Infant EEG. A collaboration between [DaSCI](https://dasci.es/) and [CIMCYC](https://cimcyc.ugr.es/).
 
 ## Overview
 
