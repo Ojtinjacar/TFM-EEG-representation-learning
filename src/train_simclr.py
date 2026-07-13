@@ -1,6 +1,7 @@
 import os
-import argparse 
-import numpy as np 
+import sys
+import argparse
+import numpy as np
 import pandas as pd
 
 import torch
@@ -13,8 +14,12 @@ from models import EnhancedAttentionLSTM
     
 class CIMCYCDataset(Dataset):
 
-    def __init__(self, X):
+    def __init__(self, X, aug_mode="legacy"):
         self.X = torch.FloatTensor(X)
+        # Augmentation strategy: "legacy" (original behaviour) or "zone_preserving"
+        # (drops the spatial channel-shuffle, adds PSD-preserving transforms and enables
+        # the correlation-based validation). See --aug_mode.
+        self.aug_mode = aug_mode
 
     def __len__(self):
         return len(self.X)
@@ -28,6 +33,11 @@ class CIMCYCDataset(Dataset):
         return anchor, aug1, aug2
 
     def augment_sample(self, sample):
+        if self.aug_mode == "legacy":
+            return self._augment_legacy(sample)
+        return self._augment_composed(sample)
+
+    def _augment_legacy(self, sample):
         augmented = sample.clone()
         
         spatial_augmentations = [
@@ -92,9 +102,92 @@ class CIMCYCDataset(Dataset):
         scale = torch.FloatTensor(1).uniform_(*scale_range)
         return sample * scale
 
+    # ------------------------------------------------------------------
+    # Composed strategies (Experiments 2 and the 2x2 ablation). Additive: does not
+    # alter the legacy pools above. Based on Rommel et al. 2022 (arXiv:2206.14483).
+    #
+    #   mode              spatial pool         temporal/freq pool
+    #   legacy            dropout + swap       legacy temporal              (in _augment_legacy)
+    #   no_swap           dropout              legacy temporal              -> isolates removing swap
+    #   legacy_plus_psd   dropout + swap       PSD-preserving pool          -> isolates adding new augs
+    #   zone_preserving   dropout              PSD-preserving pool          -> both
+    # ------------------------------------------------------------------
+    def _pools_for_mode(self):
+        dropout = [self.apply_channel_dropout]
+        dropout_swap = [self.apply_channel_dropout, self.apply_channel_swap]
+        legacy_temporal = [self.apply_time_shift, self.add_gaussian_noise, self.apply_zero_masking]
+        psd_temporal = [
+            self.apply_time_shift,
+            self.add_gaussian_noise,
+            self.apply_smooth_time_mask,
+            self.apply_ft_surrogate,
+            self.apply_sign_flip,
+            self.apply_time_reverse,
+        ]
+        pools = {
+            "no_swap": (dropout, legacy_temporal),
+            "legacy_plus_psd": (dropout_swap, psd_temporal),
+            "zone_preserving": (dropout, psd_temporal),
+        }
+        return pools[self.aug_mode]
+
+    def _augment_composed(self, sample, max_retries=3, min_correlation=0.3):
+        """Apply one spatial + one temporal/frequency augmentation from the pools of the
+        current aug_mode. The correlation check is enforced for perturbation transforms;
+        PSD-preserving transforms (FTSurrogate, SignFlip, TimeReverse) bypass it because they
+        decorrelate the signal by design without destroying information.
+        """
+        spatial_pool, tempfreq_pool = self._pools_for_mode()
+        validation_exempt = (self.apply_ft_surrogate, self.apply_sign_flip, self.apply_time_reverse)
+
+        last = sample.clone()
+        for _ in range(max_retries):
+            candidate = sample.clone()
+            candidate = spatial_pool[np.random.randint(len(spatial_pool))](candidate)
+            tf = tempfreq_pool[np.random.randint(len(tempfreq_pool))]
+            candidate = tf(candidate)
+            last = candidate
+            if tf in validation_exempt or self.validate_augmentation(sample, candidate, min_correlation):
+                return candidate
+        return last
+
+    def apply_ft_surrogate(self, sample, phase_noise_max=None):
+        """FTSurrogate: randomize Fourier phases with a shift SHARED across channels.
+        Preserves the PSD (per-band/per-zone power) and cross-channel correlations.
+        """
+        if phase_noise_max is None:
+            phase_noise_max = 0.9 * float(np.pi)
+        n_times = sample.shape[1]
+        spectrum = torch.fft.rfft(sample, dim=1)                 # (C, n_freqs) complex
+        n_freqs = spectrum.shape[1]
+        dphi = torch.empty(n_freqs).uniform_(0.0, phase_noise_max)
+        dphi[0] = 0.0                                            # keep the DC component
+        phase = torch.exp(1j * dphi).unsqueeze(0)               # (1, n_freqs), shared across channels
+        surrogate = torch.fft.irfft(spectrum * phase, n=n_times, dim=1)
+        return surrogate.to(sample.dtype)
+
+    def apply_smooth_time_mask(self, sample, mask_len_ratio=0.15, sharpness=10.0):
+        """SmoothTimeMask: zero out a temporal segment with smooth sigmoid transitions."""
+        n_times = sample.shape[1]
+        mask_len = max(1, int(n_times * mask_len_ratio))
+        t_cut = torch.randint(0, max(1, n_times - mask_len), (1,)).item()
+        t = torch.arange(n_times, dtype=sample.dtype)
+        rise = torch.sigmoid(sharpness * (t - t_cut))
+        fall = torch.sigmoid(sharpness * (t_cut + mask_len - t))
+        keep = 1.0 - rise * fall                                # ~0 inside the window, ~1 outside
+        return sample * keep.unsqueeze(0)
+
+    def apply_time_reverse(self, sample):
+        """TimeReverse: flip the time axis (preserves the PSD)."""
+        return torch.flip(sample, dims=[1])
+
+    def apply_sign_flip(self, sample):
+        """SignFlip: invert the sign of all channels (preserves the PSD)."""
+        return -sample
+
 def main(args):
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -106,19 +199,51 @@ def main(args):
     meta_df = pd.read_csv(meta_path)
 
     # --- Exclude subjects for the test set ---
+    # keep_mask spans the ORIGINAL window order (needed to remap the global neighbor index).
     if args.exclude_subjects:
-        print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
         keep_mask = ~meta_df['subject'].isin(args.exclude_subjects)
-
+        print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
         X_np = X_np[keep_mask.values]
         meta_df = meta_df[keep_mask].reset_index(drop=True)
         print(f"Number of windows for pre-training after exclusion: {len(X_np)}")
+    else:
+        keep_mask = pd.Series(True, index=range(len(X_np)))
 
     X = torch.tensor(X_np, dtype=torch.float32)
     meta = meta_df.to_numpy()
 
-    # Create datasets using subsets
-    full_dataset = CIMCYCDataset(X)
+    # Create dataset: augment-based positives (default) or neighbor-based positives.
+    if args.positives == "neighbor":
+        _neighbor_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+        if _neighbor_src not in sys.path:
+            sys.path.insert(0, _neighbor_src)
+        from neighbor_positives import NeighborPositiveDataset
+
+        nidx_path = os.path.join(args.neighbor_index_dir, f"neighbor_index_{args.neighbor_metric}.npy")
+        nidx_full = np.load(nidx_path)
+        if nidx_full.shape[0] != len(keep_mask):
+            raise ValueError(
+                f"neighbor_index ({nidx_full.shape[0]}) no alinea con el dataset ({len(keep_mask)}). "
+                "El indice debe computarse sobre el mismo conjunto de ventanas (mismo N/orden)."
+            )
+        # Remap global window positions to the (possibly subject-filtered) training subset.
+        kept = keep_mask.values
+        g2l = np.full(len(kept), -1, dtype=np.int64)
+        g2l[kept] = np.arange(int(kept.sum()))
+        nidx_local = nidx_full[kept]
+        neighbor_index = np.full_like(nidx_local, -1)
+        valid = nidx_local >= 0
+        neighbor_index[valid] = g2l[nidx_local[valid]]  # neighbors of excluded subjects -> -1
+
+        view1_augmenter = CIMCYCDataset(X, aug_mode=args.aug_mode)
+        full_dataset = NeighborPositiveDataset(
+            X, neighbor_index, augment=view1_augmenter.augment_sample, fallback="duplicate",
+        )
+        print(f"Positives=neighbor metric={args.neighbor_metric} "
+              f"coverage={full_dataset.coverage():.3f} view1_aug_mode={args.aug_mode}")
+    else:
+        full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
+        print(f"Positives=augment aug_mode={args.aug_mode}")
     train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     eval_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=False)
 
@@ -277,6 +402,39 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Fold identifier to include in model filename (e.g., 'fold0')."
+    )
+    parser.add_argument(
+        "--aug_mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving"],
+        help=(
+            "Augmentation strategy: 'legacy' (original: channel dropout/swap + "
+            "time shift/gaussian/zero-mask); 'zone_preserving' (drops channel swap, adds "
+            "PSD-preserving transforms FTSurrogate/SmoothTimeMask/SignFlip/TimeReverse and "
+            "enables the correlation validation). Used for view1 when --positives neighbor."
+        )
+    )
+    parser.add_argument(
+        "--positives",
+        type=str,
+        default="augment",
+        choices=["augment", "neighbor"],
+        help="Positive pair source: 'augment' (two augmentations) or 'neighbor' (view2 = real "
+             "nearest window, view1 = augmented anchor). See code/src/neighbor_positives.py."
+    )
+    parser.add_argument(
+        "--neighbor_metric",
+        type=str,
+        default="cosine",
+        choices=["cosine", "wasserstein", "riemann"],
+        help="Distance used to find the neighbor positive (only if --positives neighbor)."
+    )
+    parser.add_argument(
+        "--neighbor_index_dir",
+        type=str,
+        default="data/processed/neighbor_index",
+        help="Directory with neighbor_index_<metric>.npy (from build_neighbor_index.py)."
     )
 
     args = parser.parse_args()

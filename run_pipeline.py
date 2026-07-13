@@ -2,6 +2,7 @@ import os
 import subprocess
 import argparse
 import re
+import random
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -40,13 +41,29 @@ def main(args):
     MODEL_SAVE_DIR = "save/models"
     FIGURE_SAVE_DIR = "save/figures"
 
+    # Ensure output directories exist (supervised downstream relies on defaults)
+    for d in (MODEL_SAVE_DIR, FIGURE_SAVE_DIR,
+              os.path.join(FIGURE_SAVE_DIR, "pretrain"),
+              os.path.join(FIGURE_SAVE_DIR, "prediction")):
+        os.makedirs(d, exist_ok=True)
+
+    # Subject pool for the held-out test split (subject-based evaluation).
+    all_subjects = sorted(pd.read_csv(BASE_META_PATH)["subject"].unique().tolist())
+    TEST_K = min(args.test_k, len(all_subjects) - 1)
+
     # List to store the results of each run
     results = []
 
     print(f"=== STARTING PIPELINE FOR METHOD: {args.method} OVER {args.repetitions} REPETITIONS ===")
 
     for i in range(1, args.repetitions + 1):
+        # Repeated random subject holdout, seeded per repetition: the SAME test
+        # subjects are used across all zones/bands within a repetition (fair zone
+        # comparison), and CHANGE between repetitions (genuine replication for the ANOVA).
+        rep_rng = random.Random(1000 + i)
+        test_subjects = rep_rng.sample(all_subjects, k=TEST_K)
         print(f"\n========== REPETITION {i}/{args.repetitions} ==========")
+        print(f"Held-out test subjects ({len(test_subjects)}): {test_subjects}")
         for zone in ZONES:
             for band_name, (l_freq, h_freq) in BANDS.items():
                 
@@ -70,7 +87,8 @@ def main(args):
                         "--l_freq", str(l_freq),
                         "--h_freq", str(h_freq),
                         "--zones", *zones_for_postprocessing,
-                        "--output_path", processed_data_dir
+                        "--output_path", processed_data_dir,
+                        "--norm_mode", args.norm_mode,
                     ]
                     subprocess.run(post_cmd, check=True, capture_output=True)
 
@@ -86,17 +104,31 @@ def main(args):
                             "--zone", zone,
                             "--frequency", band_name,
                             "--save_dir", MODEL_SAVE_DIR,
-                            "--plot_dir", os.path.join(FIGURE_SAVE_DIR, "pretrain")
+                            "--plot_dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
+                            "--batch_size", "512",
+                            "--num_epochs", str(args.num_epochs),
+                            "--fold_id", f"rep{i}",
+                            "--aug_mode", args.aug_mode,
+                            "--positives", args.positives,
+                            "--neighbor_metric", args.neighbor_metric,
+                            "--neighbor_index_dir", args.neighbor_index_dir,
+                            # Prevent leakage: the SSL backbone must NOT see test subjects.
+                            "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
                     elif args.method == "AE":
                         train_script = "src/train_auto.py"
                         train_cmd = [
                             "python", train_script,
                             "--data-path", os.path.join(processed_data_dir, "processed_windows.npy"),
+                            "--meta-path", os.path.join(processed_data_dir, "processed_metadata.csv"),
                             "--zone", zone,
                             "--frequency", band_name,
                             "--save-model-dir", MODEL_SAVE_DIR,
-                            "--save-fig-dir", os.path.join(FIGURE_SAVE_DIR, "pretrain")
+                            "--save-fig-dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
+                            "--epochs", str(args.num_epochs),
+                            "--fold_id", f"rep{i}",
+                            # Prevent leakage: the SSL backbone must NOT see test subjects.
+                            "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
                     
                     subprocess.run(train_cmd, check=True, capture_output=True)
@@ -122,7 +154,9 @@ def main(args):
                         "--method", args.method,
                         "--zone", zone,
                         "--frequency", band_name,
-                        "--target", args.target 
+                        "--target", args.target,
+                        "--test_subjects", *[str(s) for s in test_subjects],
+                        "--num_epochs", str(args.num_epochs),
                     ]
 
                 elif args.method == "supervised":
@@ -136,7 +170,9 @@ def main(args):
                         "--method", "supervised",
                         "--zone", zone,
                         "--frequency", band_name,
-                        "--target", args.target
+                        "--target", args.target,
+                        "--test_subjects", *[str(s) for s in test_subjects],
+                        "--num_epochs", str(args.num_epochs),
                     ]
                 # We run and capture the output to parse the nRMSE
                 result = subprocess.run(downstream_cmd, check=True, capture_output=True, text=True)
@@ -144,7 +180,7 @@ def main(args):
                 # --- 4. Collecting Results ---
                 print(f"  [4/4] Collecting results for {run_id}...")
                 output = result.stdout
-                match = re.search(r"Test nRMSE=([\d.]+)", output)
+                match = re.search(r"Test nRMSE \(Subject-Avg\)=([\d.]+)", output)
                 
                 if match:
                     nrmse = float(match.group(1))
@@ -190,8 +226,8 @@ def main(args):
 
     ax = sns.barplot(
         data=results_df,
-        x="Frequency Band",
-        y="nRMSE",
+        x="frequency",
+        y="nrmse",
         hue="zone",
         order=band_order,
         hue_order=zone_order,
@@ -239,6 +275,52 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Needed to preprocess?"
+    )
+    parser.add_argument(
+        "--test_k",
+        type=int,
+        default=9,
+        help="Number of held-out test subjects per repetition (subject-based split)."
+    )
+    parser.add_argument(
+        "--num_epochs",
+        type=int,
+        default=100,
+        help="Training epochs per supervised cell (forwarded to downstream.py)."
+    )
+    parser.add_argument(
+        "--norm_mode",
+        type=str,
+        default="per_channel",
+        choices=["per_channel", "global", "none"],
+        help="Amplitude normalization forwarded to postprocessing.py (per_channel|global|none)."
+    )
+    parser.add_argument(
+        "--aug_mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving"],
+        help="Augmentation strategy forwarded to train_simclr.py (legacy|zone_preserving)."
+    )
+    parser.add_argument(
+        "--positives",
+        type=str,
+        default="augment",
+        choices=["augment", "neighbor"],
+        help="Positive pair source forwarded to train_simclr.py (augment|neighbor)."
+    )
+    parser.add_argument(
+        "--neighbor_metric",
+        type=str,
+        default="cosine",
+        choices=["cosine", "wasserstein", "riemann"],
+        help="Neighbor distance forwarded to train_simclr.py (cosine|wasserstein|riemann)."
+    )
+    parser.add_argument(
+        "--neighbor_index_dir",
+        type=str,
+        default="data/processed/neighbor_index",
+        help="Directory with neighbor_index_<metric>.npy forwarded to train_simclr.py."
     )
     args = parser.parse_args()
     main(args)

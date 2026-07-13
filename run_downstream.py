@@ -11,8 +11,8 @@ from sklearn.metrics import r2_score
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
-LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss"]
-FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss"]
+LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
+FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 
 def parse_output(output):
     """
@@ -71,6 +71,8 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         model_filename = f"MAE_{zone}_{frequency}_{fold_id}_hidden128_mask30_block25_e100.pth"
     elif method == "TripletLoss":
         model_filename = f"Triplet_{target}_{zone}_{frequency}_{fold_id}_emb128_m0.4.pth"
+    elif method == "VAE":
+        model_filename = f"VAE_{zone}_{frequency}_{fold_id}_hidden128_beta0.003_e100.pth"
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
@@ -113,6 +115,14 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         command = [
             "python", "src/train_triplet_loss.py",
             "--target", target,
+            "--zone", zone,
+            "--frequency", frequency,
+            "--fold_id", fold_id,
+            "--exclude_subjects"
+        ] + [str(s) for s in test_subjects]
+    elif method == "VAE":
+        command = [
+            "python", "src/train_vae.py",
             "--zone", zone,
             "--frequency", frequency,
             "--fold_id", fold_id,
@@ -261,7 +271,20 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     )
     pretrained_models["MAE"] = mae_model
 
-    # 1.4 Pre-train TripletLoss for each target (depends on target)
+    # 1.4 Pre-train VAE (once, independent of target)
+    print(f"\n  [3b/5] Pre-training VAE (variational self-supervised)...", flush=True)
+    vae_model = run_pretraining(
+        method="VAE",
+        target=None,
+        zone=args.zone,
+        frequency=args.frequency,
+        test_subjects=test_subjects,
+        fold_id=fold_id,
+        no_skip=args.no_skip
+    )
+    pretrained_models["VAE"] = vae_model
+
+    # 1.5 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
         print(f"\n  [{4+target_idx}/5] Pre-training TripletLoss for target '{target}'...", flush=True)
 
@@ -321,6 +344,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path = pretrained_models["AE"]
                 elif method == "MAE":
                     model_path = pretrained_models["MAE"]
+                elif method == "VAE":
+                    model_path = pretrained_models["VAE"]
                 elif method == "TripletLoss":
                     model_path = pretrained_models[f"TripletLoss_{target}"]
                 else:  # PCA o supervised

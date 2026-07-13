@@ -113,10 +113,25 @@ def main(args):
             verbose=True
         )
 
-    # Standarization with mean, std from all signal per channel
-    mean_ch = X.mean(axis=(0, 2), keepdims=True)  # shape: (1, n_channels, 1)
-    std_ch = X.std(axis=(0, 2), keepdims=True)    # shape: (1, n_channels, 1)
-    X = (X - mean_ch) / (std_ch + 1e-12)
+    # Amplitude normalization (selectable via --norm_mode).
+    # WARNING: per_channel z-score fixes each channel's variance to 1, which by Parseval
+    # removes absolute power and the aperiodic offset -- the markers with the strongest
+    # regional (antero-posterior) gradient of maturation. Use 'global' or 'none' to preserve
+    # inter-zone amplitude differences (e.g. for the FOOOF/APSD baseline).
+    if args.norm_mode == "per_channel":
+        mean_ch = X.mean(axis=(0, 2), keepdims=True)  # shape: (1, n_channels, 1)
+        std_ch = X.std(axis=(0, 2), keepdims=True)    # shape: (1, n_channels, 1)
+        X = (X - mean_ch) / (std_ch + 1e-12)
+    elif args.norm_mode == "global":
+        # Single mean/std shared across channels -> preserves inter-channel/inter-zone scale.
+        mean_g = X.mean()
+        std_g = X.std()
+        X = (X - mean_g) / (std_g + 1e-12)
+    elif args.norm_mode == "none":
+        pass  # keep raw amplitude/offset intact
+    else:
+        raise ValueError(f"Unknown norm_mode: {args.norm_mode}")
+    print(f"[postprocessing] Amplitude normalization mode: {args.norm_mode}")
 
     # Window extraction
     X_win, meta_win = apply_windows(X, meta, SFREQ, args.seconds)
@@ -186,6 +201,19 @@ if __name__ == "__main__":
         type=float,
         default=5.0,
         help="Seconds to build windows"
+    )
+
+    parser.add_argument(
+        "--norm_mode",
+        type=str,
+        default="per_channel",
+        choices=["per_channel", "global", "none"],
+        help=(
+            "Amplitude normalization: 'per_channel' (z-score per channel, default, "
+            "legacy behaviour); 'global' (single mean/std shared across channels, "
+            "preserves inter-zone amplitude); 'none' (no amplitude normalization, "
+            "recommended for FOOOF/APSD spectral features)."
+        )
     )
 
     parser.add_argument(

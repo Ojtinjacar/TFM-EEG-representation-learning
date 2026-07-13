@@ -929,7 +929,7 @@ def found_k_clusters(embeddings_np, filename="cluster_metrics.png"):
     plt.savefig(filename, dpi=300)
     plt.close(fig) 
 
-def infer_embeddings_in_batches(model, X_data, batch_size=512, device='cuda'):
+def infer_embeddings_in_batches(model, X_data, batch_size=512, device=None):
 
     model.eval()
     all_embeddings = []

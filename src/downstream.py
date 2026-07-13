@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.decomposition import PCA
 
-from models import EnhancedAttentionLSTM, AttentionLSTMAutoencoder, MaskedAttentionLSTMAutoencoder
+from models import EnhancedAttentionLSTM, AttentionLSTMAutoencoder, MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder
 
 # ============================
 #   DATASETS
@@ -308,7 +308,7 @@ def evaluate_and_plot(
 # ============================
 
 def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Usando dispositivo: {device}")
 
     # Load data
@@ -340,7 +340,7 @@ def main(args):
         test_subjects=args.test_subjects
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
@@ -360,7 +360,8 @@ def main(args):
             "SimCLR": EnhancedAttentionLSTM,
             "AE": AttentionLSTMAutoencoder,
             "MAE": MaskedAttentionLSTMAutoencoder,
-            "TripletLoss": EnhancedAttentionLSTM
+            "TripletLoss": EnhancedAttentionLSTM,
+            "VAE": VariationalAttentionLSTMAutoencoder
         }
         model_class = model_map.get(args.method)
         
@@ -579,7 +580,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE"],
         required=True,
         help="Method to use."
     )

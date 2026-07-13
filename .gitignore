@@ -1,0 +1,40 @@
+# Byte-compiled / optimized Python files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Pipeline outputs (models, figures, downstream results)
+save/
+
+# Private / large data: CIMCYC dataset (raw + processed EEG, ~2.6 GB)
+data/
+
+# Serialized model checkpoints / artifacts
+*.pt
+*.pth
+*.ckpt
+
+# Python tooling caches and build artifacts
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# OS cruft
+.DS_Store
+
+# Logs
+*.log

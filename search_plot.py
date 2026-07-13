@@ -10,8 +10,8 @@ from statsmodels.stats.anova import anova_lm
 
 SAVE_DIR = "save/figures"
 METHOD = "supervised"
-TARGET = "cit_36mo"
-REPS = 5
+TARGET = "age"
+REPS = 3
 CSV_PATH = f"save/figures/summary_results_{METHOD}_{TARGET}.csv" 
 
 INDIVIDUAL_ZONES = ["frontal", "central", "occipital", "parietal", "all"]

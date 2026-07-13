@@ -57,7 +57,7 @@ class CNNAutoencoder(nn.Module):
             x = x.unsqueeze(1)  # -> (B, 1, C, T)
             encoded = self.encoder(x)  # -> (B, H, 1, T')
             pooled = F.adaptive_avg_pool2d(encoded, (1, 1))  # -> (B, H, 1, 1)
-            return pooled.view(pooled.size(0), -1)  # -> (B, H)
+            return pooled.reshape(pooled.size(0), -1)  # -> (B, H)
 
 
 class AttentionLSTMAutoencoder(nn.Module):
@@ -137,7 +137,7 @@ class AttentionLSTMAutoencoder(nn.Module):
         x = x.unsqueeze(1)  # (B, 1, C, T)
         x = self.encoder_cnn(x)  # (B, H, 1, T')
         x = x.squeeze(2)         # (B, H, T')
-        x = x.permute(0, 2, 1)   # (B, T', H)
+        x = x.permute(0, 2, 1).contiguous()   # (B, T', H)
 
         lstm_out, _ = self.encoder_lstm(x)  # (B, T', 2*LSTM_H)
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
@@ -148,7 +148,7 @@ class AttentionLSTMAutoencoder(nn.Module):
         x, _ = self.decoder_lstm(embedding)  # (B, T', 2*LSTM_H)
         x = self.reconstruction_layer(x)     # (B, T', H)
 
-        x = x.permute(0, 2, 1).unsqueeze(2)  # (B, H, 1, T')
+        x = x.permute(0, 2, 1).contiguous().unsqueeze(2)  # (B, H, 1, T')
         x = self.decoder_deconv(x)           # (B, C, ?, T)
         x = x.squeeze(2)                     # (B, C, T)
         return x
@@ -321,7 +321,7 @@ class MaskedAttentionLSTMAutoencoder(nn.Module):
         x = x.unsqueeze(1)  # (B, 1, C, T)
         x = self.encoder_cnn(x)  # (B, H, 1, T')
         x = x.squeeze(2)         # (B, H, T')
-        x = x.permute(0, 2, 1)   # (B, T', H)
+        x = x.permute(0, 2, 1).contiguous()   # (B, T', H)
 
         lstm_out, _ = self.encoder_lstm(x)  # (B, T', 2*LSTM_H)
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
@@ -332,7 +332,7 @@ class MaskedAttentionLSTMAutoencoder(nn.Module):
         x, _ = self.decoder_lstm(embedding)  # (B, T', 2*LSTM_H)
         x = self.reconstruction_layer(x)     # (B, T', H)
 
-        x = x.permute(0, 2, 1).unsqueeze(2)  # (B, H, 1, T')
+        x = x.permute(0, 2, 1).contiguous().unsqueeze(2)  # (B, H, 1, T')
         x = self.decoder_deconv(x)           # (B, C, ?, T)
         x = x.squeeze(2)                     # (B, C, T)
         return x
@@ -446,7 +446,7 @@ class EnhancedAttentionLSTM(nn.Module):
         # Reshape for LSTM: (batch, time, channels)
         # Remove the redundant spatial dimension and permute
         x = x.squeeze(2)  # Remove the spatial dimension that was reduced to 1
-        x = x.permute(0, 2, 1)  # (batch, time, channels)
+        x = x.permute(0, 2, 1).contiguous()  # (batch, time, channels)
 
         # LSTM layer
         lstm_out, _ = self.lstm(x)
@@ -469,3 +469,129 @@ class EnhancedAttentionLSTM(nn.Module):
         """
         embedding = self.get_embedding(x)
         return self.projection(embedding)
+
+
+class VariationalAttentionLSTMAutoencoder(nn.Module):
+    """Variational Autoencoder (VAE) for EEG built on the shared CNN+BiLSTM+attention backbone.
+
+    The feature-extraction and reconstruction layers are reused verbatim from
+    ``AttentionLSTMAutoencoder`` via composition, so this method stays comparable to the
+    deterministic AE/MAE (same encoder, only the bottleneck changes). A global stochastic
+    latent ``z`` of size ``latent_dim`` is placed on the temporally pooled encoder
+    representation: the encoder outputs ``mu`` and ``log(sigma^2)``, ``z`` is drawn with the
+    reparameterization trick, and the decoder reconstructs the full signal from ``z``.
+
+    The training objective (negative ELBO = MSE reconstruction + beta * KL) lives in the
+    training script, not here.
+    """
+
+    def __init__(self, input_size, hidden_size, n_channels=2, sfreq=100,
+                 lstm_hidden_size=64, lstm_layers=2, n_attention_heads=4,
+                 dropout=0.25, latent_dim=None):
+        """Initializes the variational autoencoder.
+
+        Args:
+            input_size (int): Temporal length T of the input window.
+            hidden_size (int): Encoder/decoder feature width H (and default latent size).
+            n_channels (int): Number of EEG channels C.
+            sfreq (int): Sampling frequency, kept for signature compatibility.
+            lstm_hidden_size (int): Hidden size of each BiLSTM direction.
+            lstm_layers (int): Number of stacked BiLSTM layers.
+            n_attention_heads (int): Number of multi-head attention heads.
+            dropout (float): Dropout probability.
+            latent_dim (int, optional): Dimensionality J of the latent vector z. Defaults
+                to ``hidden_size`` so that ``get_embedding`` returns a (B, hidden_size)
+                embedding compatible with the downstream head.
+        """
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.latent_dim = latent_dim if latent_dim is not None else hidden_size
+
+        # Reuse the validated deterministic backbone (encoder + mirror decoder) as-is.
+        self.backbone = AttentionLSTMAutoencoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            n_channels=n_channels,
+            sfreq=sfreq,
+            lstm_hidden_size=lstm_hidden_size,
+            lstm_layers=lstm_layers,
+            n_attention_heads=n_attention_heads,
+            dropout=dropout,
+        )
+
+        # Variational bottleneck (the only method-specific parameters).
+        self.fc_mu = nn.Linear(hidden_size, self.latent_dim)
+        self.fc_logvar = nn.Linear(hidden_size, self.latent_dim)
+        self.fc_expand = nn.Linear(self.latent_dim, hidden_size)
+
+    def _pool_encode(self, x):
+        """Encodes x and pools the temporal sequence into a single vector.
+
+        Args:
+            x (torch.Tensor): Input of shape (B, C, T).
+
+        Returns:
+            tuple[torch.Tensor, int]: Pooled representation (B, H) and the temporal
+            length T' of the encoder sequence (needed to rebuild the decoder input).
+        """
+        h_seq = self.backbone.encode(x)   # (B, T', H)
+        h = h_seq.mean(dim=1)             # (B, H) global temporal pooling
+        return h, h_seq.size(1)
+
+    def encode_params(self, x):
+        """Computes the parameters of the approximate posterior q(z|x).
+
+        Args:
+            x (torch.Tensor): Input of shape (B, C, T).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, int]: mu (B, J), logvar (B, J) and the
+            temporal length T' of the encoder sequence.
+        """
+        h, t_prime = self._pool_encode(x)
+        return self.fc_mu(h), self.fc_logvar(h), t_prime
+
+    def reparameterize(self, mu, logvar):
+        """Samples z ~ N(mu, sigma^2) differentiably (reparameterization trick).
+
+        Args:
+            mu (torch.Tensor): Posterior mean (B, J).
+            logvar (torch.Tensor): Posterior log-variance (B, J).
+
+        Returns:
+            torch.Tensor: Sampled latent z of shape (B, J).
+        """
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + std * eps
+
+    def forward(self, x):
+        """Runs the full VAE pass.
+
+        Args:
+            x (torch.Tensor): Input of shape (B, C, T).
+
+        Returns:
+            tuple: (reconstruction (B, C, T), mu (B, J), logvar (B, J), z (B, J)).
+        """
+        mu, logvar, t_prime = self.encode_params(x)
+        z = self.reparameterize(mu, logvar)
+        z_seq = self.fc_expand(z).unsqueeze(1).repeat(1, t_prime, 1)  # (B, T', H)
+        reconstruction = self.backbone.decode(z_seq)                 # (B, C, T)
+        return reconstruction, mu, logvar, z
+
+    def get_embedding(self, x):
+        """Returns the deterministic latent mean for downstream tasks.
+
+        Uses mu (no sampling) so the embedding is stable, while keeping gradient flow for
+        fine-tuning. Shape (B, latent_dim), matching the downstream regression head.
+
+        Args:
+            x (torch.Tensor): Input of shape (B, C, T).
+
+        Returns:
+            torch.Tensor: Latent mean embedding of shape (B, latent_dim).
+        """
+        h, _ = self._pool_encode(x)
+        return self.fc_mu(h)
