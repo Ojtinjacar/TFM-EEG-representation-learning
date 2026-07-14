@@ -14,6 +14,18 @@ from sklearn.metrics import r2_score
 LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 
+# SimCLR variants. Each is a first-class "method": it gets its own pre-training
+# (SimCLR encoder with the given train_simclr.py flags) and its own result rows
+# (labelled with the variant name). "tag" disambiguates the saved .pth so variants
+# never overwrite each other. "SimCLR" (empty flags/tag) is the standard control.
+# The registry is extensible: add augmentation variants (e.g. --aug_mode) the same way.
+SIMCLR_VARIANTS = {
+    "SimCLR":             {"flags": [], "tag": ""},
+    "SimCLR-nbr-cosine":  {"flags": ["--positives", "neighbor", "--neighbor_metric", "cosine"], "tag": "nbrcosine"},
+    "SimCLR-nbr-wasser":  {"flags": ["--positives", "neighbor", "--neighbor_metric", "wasserstein"], "tag": "nbrwasser"},
+    "SimCLR-nbr-riemann": {"flags": ["--positives", "neighbor", "--neighbor_metric", "riemann"], "tag": "nbrriemann"},
+}
+
 def parse_output(output):
     """
     Parses the stdout of downstream.py to extract metrics and subject-level predictions.
@@ -44,27 +56,54 @@ def parse_output(output):
 
     return nrmse, r2, rmse, subject_avgs
 
-def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False):
+def config_data_paths(zone, frequency):
+    """Builds the processed data/metadata paths for a zone x frequency config.
+
+    Mirrors the layout produced by run_pipeline.py: one folder per config at
+    ``data/processed/{zone}_{frequency}/`` holding processed_windows.npy and
+    processed_metadata.csv.
+
+    Args:
+        zone (str): Brain zone (e.g., "all", "frontal").
+        frequency (str): Frequency band (e.g., "all", "alpha").
+
+    Returns:
+        tuple[str, str]: (windows_path, metadata_path).
+    """
+    cfg_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
+    return (os.path.join(cfg_dir, "processed_windows.npy"),
+            os.path.join(cfg_dir, "processed_metadata.csv"))
+
+
+def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=0.003,
+                    simclr_flags=None, simclr_tag=""):
     """
     Constructs and runs a single call to pretraining script, excluding test subjects.
     Returns the path to the trained model.
 
     Args:
-        method: Pre-training method (SimCLR, AE, TripletLoss)
+        method: Pre-training method (SimCLR, AE, MAE, VAE, TripletLoss)
         target: Target for TripletLoss (ignored for SimCLR and AE)
         zone: Brain zone
         frequency: Frequency band
         test_subjects: List of subjects to exclude
         fold_id: Unique fold identifier for naming the model
         no_skip: If True, forces retraining even if the model exists
+        vae_beta: KL weight for the VAE (encoded in its model filename)
+        simclr_flags: Extra flags for train_simclr.py that select a SimCLR variant
+            (e.g. ["--positives", "neighbor", "--neighbor_metric", "cosine"]).
+        simclr_tag: Short tag appended to the SimCLR model filename so different
+            variants never overwrite each other's checkpoint.
     """
+    simclr_flags = list(simclr_flags or [])
     if method in ["PCA", "supervised"]:
         # These methods do not require pre-training
         return None
 
     # Determine the model filename based on the method
     if method == "SimCLR":
-        model_filename = f"SimCLR_{zone}_{frequency}_{fold_id}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
+        _tag = f"_{simclr_tag}" if simclr_tag else ""
+        model_filename = f"SimCLR_{zone}_{frequency}_{fold_id}{_tag}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
     elif method == "AE":
         model_filename = f"AE_{zone}_{frequency}_{fold_id}_hidden128_e100.pth"
     elif method == "MAE":
@@ -72,7 +111,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     elif method == "TripletLoss":
         model_filename = f"Triplet_{target}_{zone}_{frequency}_{fold_id}_emb128_m0.4.pth"
     elif method == "VAE":
-        model_filename = f"VAE_{zone}_{frequency}_{fold_id}_hidden128_beta0.003_e100.pth"
+        model_filename = f"VAE_{zone}_{frequency}_{fold_id}_hidden128_beta{vae_beta}_e100.pth"
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
@@ -86,11 +125,16 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
 
     # Build command based on the method
     if method == "SimCLR":
+        # Point SimCLR at the same zone x frequency data folder that downstream reads
+        # (its default is the empty data/processed/5_s), then append the variant flags.
+        simclr_data_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
         command = [
             "python", "src/train_simclr.py",
             "--zone", zone,
             "--frequency", frequency,
             "--fold_id", fold_id,
+            "--data_path", simclr_data_dir,
+        ] + simclr_flags + [
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
     elif method == "AE":
@@ -129,6 +173,14 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
 
+    # Point the generative train scripts at the zone x frequency data (they share
+    # --data-path/--meta-path); otherwise they fall back to the empty data/processed/5_s.
+    if method in ("AE", "MAE", "VAE"):
+        win_path, meta_path = config_data_paths(zone, frequency)
+        command += ["--data-path", win_path, "--meta-path", meta_path]
+    if method == "VAE":
+        command += ["--beta", str(vae_beta)]
+
     print(f"  > Running pretraining command: {' '.join(command)}")
     try:
         result = subprocess.run(
@@ -156,19 +208,27 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"STDERR: {e.stderr}")
         return None
 
-def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None):
+def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None):
     """
     Constructs and runs a single call to downstream.py.
     Returns: (nrmse, r2, rmse, subject_avgs)
+
+    Args:
+        method: Result label (may be a SimCLR variant name, e.g. "SimCLR-nbr-cosine").
+        downstream_method: The architecture passed to downstream.py's --method (one of
+            its fixed choices). For SimCLR variants this is "SimCLR"; defaults to `method`.
     """
+    win_path, meta_path = config_data_paths(zone, frequency)
     command = [
         "python", "src/downstream.py",
-        "--method", method,
+        "--method", downstream_method or method,
         "--target", target,
         "--eval_mode", eval_mode,
         "--zone", zone,
         "--frequency", frequency,
-        "--seed", str(seed)
+        "--seed", str(seed),
+        "--data_path", win_path,
+        "--meta_path", meta_path,
     ]
 
     # PCA/supervised have model_path=None
@@ -219,6 +279,23 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     fold_id = f"fold{fold_idx}"
     seed = args.base_seed + fold_idx
 
+    # Optional method subset (e.g., --methods AE MAE VAE) to bound cost.
+    selected = set(args.methods) if getattr(args, "methods", None) else None
+    def _use(m):
+        return selected is None or m in selected
+
+    # SimCLR expands into the requested variants (control + neighbor positives, ...).
+    # Each variant is treated as its own method downstream; "SimCLR" in the base lists
+    # is replaced by the selected variant names.
+    simclr_variants = list(getattr(args, "simclr_variants", None) or ["SimCLR"]) if _use("SimCLR") else []
+    def _expand(mlist):
+        out = []
+        for m in mlist:
+            out.extend(simclr_variants) if m == "SimCLR" else out.append(m)
+        return out
+    lp_methods = _expand([m for m in LINEAR_PROBE_METHODS if _use(m)])
+    ft_methods = _expand([m for m in FINE_TUNING_METHODS if _use(m)])
+
     print(f"\n{'='*80}", flush=True)
     print(f"FOLD {fold_idx+1}: Train subjects ({len(train_subjects)}): {train_subjects}", flush=True)
     print(f"         Test subjects ({len(test_subjects)}): {test_subjects}", flush=True)
@@ -232,61 +309,56 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     # ========================================================================
     print(f"\n[PHASE 1] Pre-training models for fold {fold_idx+1}...", flush=True)
 
-    # 1.1 Pre-train SimCLR (once, independent of target)
-    print(f"\n  [1/5] Pre-training SimCLR (self-supervised)...", flush=True)
-    simclr_model = run_pretraining(
-        method="SimCLR",
-        target=None,
-        zone=args.zone,
-        frequency=args.frequency,
-        test_subjects=test_subjects,
-        fold_id=fold_id,
-        no_skip=args.no_skip
-    )
-    pretrained_models["SimCLR"] = simclr_model
+    # 1.1 Pre-train each selected SimCLR variant (once each, independent of target)
+    for variant in simclr_variants:
+        spec = SIMCLR_VARIANTS[variant]
+        vflags = list(spec["flags"])
+        if "neighbor" in vflags:  # neighbor variants need the precomputed index dir
+            vflags += ["--neighbor_index_dir", args.neighbor_index_dir]
+        print(f"\n  Pre-training {variant} (self-supervised)...", flush=True)
+        pretrained_models[variant] = run_pretraining(
+            method="SimCLR", target=None, zone=args.zone, frequency=args.frequency,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            simclr_flags=vflags, simclr_tag=spec["tag"],
+        )
 
     # 1.2 Pre-train AE (once, independent of target)
-    print(f"\n  [2/5] Pre-training AE (self-supervised)...", flush=True)
-    ae_model = run_pretraining(
-        method="AE",
-        target=None,
-        zone=args.zone,
-        frequency=args.frequency,
-        test_subjects=test_subjects,
-        fold_id=fold_id,
-        no_skip=args.no_skip
-    )
-    pretrained_models["AE"] = ae_model
+    if _use("AE"):
+        print(f"\n  Pre-training AE (self-supervised)...", flush=True)
+        pretrained_models["AE"] = run_pretraining(
+            method="AE", target=None, zone=args.zone, frequency=args.frequency,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+        )
+    else:
+        pretrained_models["AE"] = None
 
     # 1.3 Pre-train MAE (once, independent of target)
-    print(f"\n  [3/5] Pre-training MAE (masked self-supervised)...", flush=True)
-    mae_model = run_pretraining(
-        method="MAE",
-        target=None,
-        zone=args.zone,
-        frequency=args.frequency,
-        test_subjects=test_subjects,
-        fold_id=fold_id,
-        no_skip=args.no_skip
-    )
-    pretrained_models["MAE"] = mae_model
+    if _use("MAE"):
+        print(f"\n  Pre-training MAE (masked self-supervised)...", flush=True)
+        pretrained_models["MAE"] = run_pretraining(
+            method="MAE", target=None, zone=args.zone, frequency=args.frequency,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+        )
+    else:
+        pretrained_models["MAE"] = None
 
     # 1.4 Pre-train VAE (once, independent of target)
-    print(f"\n  [3b/5] Pre-training VAE (variational self-supervised)...", flush=True)
-    vae_model = run_pretraining(
-        method="VAE",
-        target=None,
-        zone=args.zone,
-        frequency=args.frequency,
-        test_subjects=test_subjects,
-        fold_id=fold_id,
-        no_skip=args.no_skip
-    )
-    pretrained_models["VAE"] = vae_model
+    if _use("VAE"):
+        print(f"\n  Pre-training VAE (variational self-supervised, beta={args.vae_beta})...", flush=True)
+        pretrained_models["VAE"] = run_pretraining(
+            method="VAE", target=None, zone=args.zone, frequency=args.frequency,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            vae_beta=args.vae_beta,
+        )
+    else:
+        pretrained_models["VAE"] = None
 
     # 1.5 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
-        print(f"\n  [{4+target_idx}/5] Pre-training TripletLoss for target '{target}'...", flush=True)
+        if not _use("TripletLoss"):
+            pretrained_models[f"TripletLoss_{target}"] = None
+            continue
+        print(f"\n  Pre-training TripletLoss for target '{target}'...", flush=True)
 
         # Filter test_subjects to include only those with valid data for this target
         valid_test_subjects = [s for s in test_subjects if s in target_subject_dict[target]]
@@ -296,16 +368,10 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             pretrained_models[f"TripletLoss_{target}"] = None
             continue
 
-        triplet_model = run_pretraining(
-            method="TripletLoss",
-            target=target,
-            zone=args.zone,
-            frequency=args.frequency,
-            test_subjects=valid_test_subjects,
-            fold_id=fold_id,
-            no_skip=args.no_skip
+        pretrained_models[f"TripletLoss_{target}"] = run_pretraining(
+            method="TripletLoss", target=target, zone=args.zone, frequency=args.frequency,
+            test_subjects=valid_test_subjects, fold_id=fold_id, no_skip=args.no_skip,
         )
-        pretrained_models[f"TripletLoss_{target}"] = triplet_model
 
     # ========================================================================
     # PHASE 2: DOWNSTREAM EVALUATION (all combinations)
@@ -313,7 +379,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     print(f"\n[PHASE 2] Downstream evaluation for fold {fold_idx+1}...", flush=True)
 
     experiment_counter = 0
-    total_experiments = len(targets) * (len(LINEAR_PROBE_METHODS) + len(FINE_TUNING_METHODS))
+    total_experiments = len(targets) * (len(lp_methods) + len(ft_methods))
 
     for target in targets:
         # Filter train and test subjects for this specific target
@@ -327,19 +393,22 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\nTarget '{target}': {len(valid_train_subjects)} train subjects, {len(valid_test_subjects)} test subjects")
 
         for eval_mode in eval_modes:
-            # Select methods based on eval_mode
+            # Select methods based on eval_mode (respecting the optional --methods subset)
             if eval_mode == "linear_probe":
-                methods = LINEAR_PROBE_METHODS
+                methods = lp_methods
             else:  # fine_tuning
-                methods = FINE_TUNING_METHODS
+                methods = ft_methods
 
             for method in methods:
                 experiment_counter += 1
                 print(f"\n  [{experiment_counter}/{total_experiments}] Evaluating: {method} | {target} | {eval_mode}")
 
-                # Determine which pre-trained model to use
-                if method == "SimCLR":
-                    model_path = pretrained_models["SimCLR"]
+                # Determine which pre-trained model to use. SimCLR variants keep their
+                # variant name as the result label but evaluate with downstream --method SimCLR.
+                downstream_method = method
+                if method in SIMCLR_VARIANTS:
+                    model_path = pretrained_models.get(method)
+                    downstream_method = "SimCLR"
                 elif method == "AE":
                     model_path = pretrained_models["AE"]
                 elif method == "MAE":
@@ -366,7 +435,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path=model_path,
                     seed=seed,
                     test_subjects=valid_test_subjects,
-                    fold_id=fold_id
+                    fold_id=fold_id,
+                    downstream_method=downstream_method
                 )
 
                 if nrmse is not None and r2 is not None and rmse is not None:
@@ -419,8 +489,11 @@ def parse_fold_ranges(fold_ranges_arg):
 
 
 def main(args):
-    # Load metadata to get subject IDs for cross-validation
-    meta_df = pd.read_csv(args.meta_path)
+    # Load metadata to get subject IDs for cross-validation. Default to the metadata of the
+    # selected zone x frequency config; an explicit --meta_path overrides it.
+    meta_path = args.meta_path if args.meta_path else config_data_paths(args.zone, args.frequency)[1]
+    meta_df = pd.read_csv(meta_path)
+    print(f"[INFO] Using metadata: {meta_path}", flush=True)
 
     # Filter subjects independently for each target
     targets = args.targets
@@ -698,8 +771,37 @@ if __name__ == "__main__":
     parser.add_argument(
         "--meta_path",
         type=str,
-        default="data/processed/5_s/processed_metadata.csv",
-        help="Path to metadata CSV file."
+        default=None,
+        help="Path to metadata CSV file. If omitted, uses data/processed/{zone}_{frequency}/."
+    )
+    parser.add_argument(
+        "--methods",
+        nargs="+",
+        type=str,
+        default=None,
+        help="Optional subset of methods to run (e.g., AE MAE VAE). Filters the default "
+             "linear-probe/fine-tuning method lists; if omitted, all supported methods run."
+    )
+    parser.add_argument(
+        "--vae_beta",
+        type=float,
+        default=0.003,
+        help="KL weight for the VAE pretraining (must match train_vae.py's beta formatting)."
+    )
+    parser.add_argument(
+        "--simclr_variants",
+        nargs="+",
+        type=str,
+        default=["SimCLR"],
+        choices=list(SIMCLR_VARIANTS.keys()),
+        help="Which SimCLR variants to run as first-class methods (default: just the "
+             "standard 'SimCLR' control). E.g. --simclr_variants SimCLR SimCLR-nbr-cosine."
+    )
+    parser.add_argument(
+        "--neighbor_index_dir",
+        type=str,
+        default="data/processed/neighbor_index",
+        help="Directory with neighbor_index_<metric>.npy, used by SimCLR neighbor-positive variants."
     )
     parser.add_argument(
         "--save_dir",
