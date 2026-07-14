@@ -102,8 +102,12 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
 
     # Determine the model filename based on the method
     if method == "SimCLR":
-        _tag = f"_{simclr_tag}" if simclr_tag else ""
-        model_filename = f"SimCLR_{zone}_{frequency}_{fold_id}{_tag}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
+        # Embed the variant tag INSIDE the fold_id handed to train_simclr.py: that script
+        # builds its own .pth name from --fold_id, so the tag must travel through fold_id
+        # for the saved file to match what we look for here (one distinct checkpoint per
+        # variant, no collisions).
+        eff_fold_id = f"{fold_id}_{simclr_tag}" if simclr_tag else fold_id
+        model_filename = f"SimCLR_{zone}_{frequency}_{eff_fold_id}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
     elif method == "AE":
         model_filename = f"AE_{zone}_{frequency}_{fold_id}_hidden128_e100.pth"
     elif method == "MAE":
@@ -132,7 +136,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "python", "src/train_simclr.py",
             "--zone", zone,
             "--frequency", frequency,
-            "--fold_id", fold_id,
+            "--fold_id", eff_fold_id,
             "--data_path", simclr_data_dir,
         ] + simclr_flags + [
             "--exclude_subjects"
