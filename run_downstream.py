@@ -19,11 +19,32 @@ FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"
 # (labelled with the variant name). "tag" disambiguates the saved .pth so variants
 # never overwrite each other. "SimCLR" (empty flags/tag) is the standard control.
 # The registry is extensible: add augmentation variants (e.g. --aug_mode) the same way.
+# Neighbor-positive index directories. The pairing STRATEGY is encoded by the directory
+# (each holds neighbor_index_<metric>.npy); the metric selects the file inside it.
+_NIDX_SESSION   = "data/processed/neighbor_index"            # same subject + same session (main)
+_NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"  # same age, different subject
+_NIDX_DIFFAGE   = "data/processed/neighbor_index_diffage"    # same subject, different age
+
+
+def _nbr(metric, index_dir):
+    """SimCLR flags for a neighbor-positive variant with a given metric and index dir."""
+    return ["--positives", "neighbor", "--neighbor_metric", metric, "--neighbor_index_dir", index_dir]
+
+
 SIMCLR_VARIANTS = {
-    "SimCLR":             {"flags": [], "tag": ""},
-    "SimCLR-nbr-cosine":  {"flags": ["--positives", "neighbor", "--neighbor_metric", "cosine"], "tag": "nbrcosine"},
-    "SimCLR-nbr-wasser":  {"flags": ["--positives", "neighbor", "--neighbor_metric", "wasserstein"], "tag": "nbrwasser"},
-    "SimCLR-nbr-riemann": {"flags": ["--positives", "neighbor", "--neighbor_metric", "riemann"], "tag": "nbrriemann"},
+    "SimCLR":                 {"flags": [], "tag": ""},                             # standard control
+    # same-session neighbor positives (main experiment)
+    "SimCLR-nbr-cosine":      {"flags": _nbr("cosine", _NIDX_SESSION),      "tag": "nbrcosine"},
+    "SimCLR-nbr-wasser":      {"flags": _nbr("wasserstein", _NIDX_SESSION), "tag": "nbrwasser"},
+    "SimCLR-nbr-riemann":     {"flags": _nbr("riemann", _NIDX_SESSION),     "tag": "nbrriemann"},
+    # ablation A: cross-subject, same age (developmental signal vs subject identity)
+    "SimCLR-xsubj-cosine":    {"flags": _nbr("cosine", _NIDX_CROSSSUBJ),      "tag": "xscosine"},
+    "SimCLR-xsubj-wasser":    {"flags": _nbr("wasserstein", _NIDX_CROSSSUBJ), "tag": "xswasser"},
+    "SimCLR-xsubj-riemann":   {"flags": _nbr("riemann", _NIDX_CROSSSUBJ),     "tag": "xsriemann"},
+    # ablation B: same subject, different age (breaks the age==session shortcut)
+    "SimCLR-diffage-cosine":  {"flags": _nbr("cosine", _NIDX_DIFFAGE),      "tag": "dacosine"},
+    "SimCLR-diffage-wasser":  {"flags": _nbr("wasserstein", _NIDX_DIFFAGE), "tag": "dawasser"},
+    "SimCLR-diffage-riemann": {"flags": _nbr("riemann", _NIDX_DIFFAGE),     "tag": "dariemann"},
 }
 
 def parse_output(output):
@@ -316,14 +337,13 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     # 1.1 Pre-train each selected SimCLR variant (once each, independent of target)
     for variant in simclr_variants:
         spec = SIMCLR_VARIANTS[variant]
-        vflags = list(spec["flags"])
-        if "neighbor" in vflags:  # neighbor variants need the precomputed index dir
-            vflags += ["--neighbor_index_dir", args.neighbor_index_dir]
+        # Each variant's flags are self-contained (including --neighbor_index_dir for
+        # neighbor variants), so the pairing strategy/metric is fully specified here.
         print(f"\n  Pre-training {variant} (self-supervised)...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method="SimCLR", target=None, zone=args.zone, frequency=args.frequency,
             test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
-            simclr_flags=vflags, simclr_tag=spec["tag"],
+            simclr_flags=spec["flags"], simclr_tag=spec["tag"],
         )
 
     # 1.2 Pre-train AE (once, independent of target)
