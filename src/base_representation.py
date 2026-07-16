@@ -12,6 +12,7 @@ Supported methods: PCA, SimCLR, AE, MAE, TripletLoss
 """
 
 import os
+import glob
 import argparse
 
 import numpy as np
@@ -30,7 +31,9 @@ from models import (
     EnhancedAttentionLSTM,
     CNNAutoencoder,
     AttentionLSTMAutoencoder,
-    MaskedAttentionLSTMAutoencoder
+    MaskedAttentionLSTMAutoencoder,
+    VariationalAttentionLSTMAutoencoder,
+    ConditionalVariationalAttentionLSTMAutoencoder,
 )
 from utils import (
     found_k_clusters,
@@ -38,11 +41,12 @@ from utils import (
     visualization_emb,
     visualization_emb_by_label,
     compute_clustering_metrics,
-    compute_similarity_matrix
+    compute_similarity_matrix,
+    CANONICAL_AGES,
 )
 
 # Available methods
-AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss"]
+AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP"]
 
 
 def get_model_path(method, zone, frequency, target=None, save_model_dir="save/models"):
@@ -50,14 +54,14 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
     Builds the path to the general pre-trained model (no fold_id).
 
     Args:
-        method: representation method (SimCLR, AE, MAE, TripletLoss)
+        method: representation method (SimCLR, AE, MAE, TripletLoss, VAE, CVAE, CVAE-SP)
         zone: brain region (all, frontal, etc.)
         frequency: frequency band (all, alpha, etc.)
         target: target for TripletLoss (age, cit_36mo). Ignored for other methods.
         save_model_dir: directory containing the models
 
     Returns:
-        Model path, or None if not applicable (PCA)
+        Model path, or None if not applicable (Raw/PCA) or no VAE/CVAE checkpoint found.
     """
     if method == "Raw" or method == "PCA":
         return None
@@ -72,6 +76,14 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
         if target is None:
             raise ValueError("TripletLoss requires a target to be specified")
         filename = f"Triplet_{target}_{zone}_{frequency}_emb128_m0.4.pth"
+    elif method in ("VAE", "CVAE", "CVAE-SP"):
+        # The VAE/CVAE filename encodes beta/prior/free-bits, which vary per run, so
+        # resolve the most recent matching checkpoint by glob instead of a fixed name.
+        pattern = os.path.join(save_model_dir, f"{method}_{zone}_{frequency}*.pth")
+        matches = glob.glob(pattern)
+        if not matches:
+            return None
+        return max(matches, key=os.path.getmtime)
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -79,18 +91,19 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
 
 
 def load_model(method, model_path, input_size, n_channels, hidden_size=128,
-               sfreq=250, device=None):
+               sfreq=250, device=None, cond_dim=16):
     """
     Loads a pre-trained model.
 
     Args:
-        method: model type (SimCLR, AE, MAE, TripletLoss)
+        method: model type (SimCLR, AE, MAE, TripletLoss, VAE, CVAE)
         model_path: path to the .pth file
         input_size: temporal length of the signals
         n_channels: number of EEG channels
         hidden_size: latent space dimensionality
         sfreq: sampling frequency
         device: device (cuda/cpu)
+        cond_dim: CVAE condition-embedding width (must match training)
 
     Returns:
         Model loaded in evaluation mode
@@ -119,10 +132,37 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
             sfreq=sfreq,
             lstm_hidden_size=hidden_size // 2
         )
+    elif method == "VAE":
+        model = VariationalAttentionLSTMAutoencoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            n_channels=n_channels,
+            sfreq=sfreq,
+            lstm_hidden_size=hidden_size // 2
+        )
+    elif method in ("CVAE", "CVAE-SP"):
+        # Same conditional architecture; the prior (rich vs standard) only shaped
+        # training and is not needed to extract embeddings.
+        model = ConditionalVariationalAttentionLSTMAutoencoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            n_conditions=len(CANONICAL_AGES),
+            n_channels=n_channels,
+            sfreq=sfreq,
+            lstm_hidden_size=hidden_size // 2,
+            cond_dim=cond_dim,
+        )
     else:
         raise ValueError(f"Unknown method for model loading: {method}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # VAE/CVAE checkpoints may carry prior submodule keys unused for embedding
+    # extraction; load non-strictly so they don't block a valid backbone load, but
+    # surface any missing/unexpected keys so a genuinely broken load is not hidden.
+    strict = method not in ("VAE", "CVAE", "CVAE-SP")
+    result = model.load_state_dict(torch.load(model_path, map_location=device), strict=strict)
+    if not strict and (result.missing_keys or result.unexpected_keys):
+        print(f"[WARN] {method} load_state_dict non-strict: "
+              f"missing={list(result.missing_keys)}, unexpected={list(result.unexpected_keys)}")
     model.to(device)
     model.eval()
 
@@ -130,7 +170,7 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
 
 
 def extract_representations(X, method, model_path=None, hidden_size=128,
-                           sfreq=250, batch_size=128, device=None):
+                           sfreq=250, batch_size=128, device=None, cond_dim=16):
     """
     Extracts representations using the specified method.
 
@@ -163,7 +203,8 @@ def extract_representations(X, method, model_path=None, hidden_size=128,
         n_channels=X.shape[1],
         hidden_size=hidden_size,
         sfreq=sfreq,
-        device=device
+        device=device,
+        cond_dim=cond_dim,
     )
     emb = infer_embeddings_in_batches(model, X, batch_size=batch_size, device=device)
     norm = np.linalg.norm(emb, axis=1, keepdims=True)
@@ -558,6 +599,12 @@ def main():
         help="Sampling frequency.",
     )
     parser.add_argument(
+        "--cond-dim",
+        type=int,
+        default=16,
+        help="CVAE/CVAE-SP condition-embedding width (must match training).",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=128,
@@ -649,7 +696,8 @@ def main():
                     hidden_size=args.hidden_size,
                     sfreq=args.sampling_freq,
                     batch_size=args.batch_size,
-                    device=device
+                    device=device,
+                    cond_dim=args.cond_dim,
                 )
                 print(f"  Representations shape: {representations.shape}", flush=True)
             except Exception as e:

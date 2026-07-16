@@ -92,7 +92,7 @@ def main(args):
                     ]
                     subprocess.run(post_cmd, check=True, capture_output=True)
 
-                if args.method in ["SimCLR", "AE"]:
+                if args.method in ["SimCLR", "AE", "VAE", "CVAE"]:
 
                     # --- 2. Backbone Training ---
                     print(f"  [2/4] Training {args.method} model for {run_id}...")
@@ -130,7 +130,33 @@ def main(args):
                             # Prevent leakage: the SSL backbone must NOT see test subjects.
                             "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
-                    
+                    elif args.method in ["VAE", "CVAE"]:
+                        train_script = "src/train_vae.py"
+                        train_cmd = [
+                            "python", train_script,
+                            "--data-path", os.path.join(processed_data_dir, "processed_windows.npy"),
+                            "--meta-path", os.path.join(processed_data_dir, "processed_metadata.csv"),
+                            "--zone", zone,
+                            "--frequency", band_name,
+                            "--save-model-dir", MODEL_SAVE_DIR,
+                            "--save-fig-dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
+                            "--epochs", str(args.num_epochs),
+                            "--fold_id", f"rep{i}",
+                            "--beta", str(args.beta),
+                            "--kl-anneal-epochs", str(args.kl_anneal_epochs),
+                            "--free-bits", str(args.free_bits),
+                        ]
+                        # CVAE = age-conditioned encoder + conditional (rich) prior, so
+                        # the "CVAE" label matches run_downstream.py. --prior governs the
+                        # plain VAE only.
+                        if args.method == "CVAE":
+                            train_cmd += ["--conditional", "--cond-dim", str(args.cond_dim),
+                                          "--prior", "conditional"]
+                        else:
+                            train_cmd += ["--prior", args.prior]
+                        # Prevent leakage: the SSL backbone must NOT see test subjects.
+                        train_cmd += ["--exclude_subjects", *[str(s) for s in test_subjects]]
+
                     subprocess.run(train_cmd, check=True, capture_output=True)
 
                     # --- 3. Model Search and Downstream Evaluation ---
@@ -253,14 +279,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised"],
+        choices=["SimCLR", "AE", "VAE", "CVAE", "supervised"],
         required=True,
         help="Pre-training method to use"
     )
     parser.add_argument(
         "--target",
         type=str,
-        choices=["age", "cit_36mo"],
+        choices=["age", "cit_36mo", "cit_48mo", "ses"],
         required=True,
         help="Prediction target"
     )
@@ -288,6 +314,38 @@ if __name__ == "__main__":
         default=100,
         help="Training epochs per supervised cell (forwarded to downstream.py)."
     )
+    # --- VAE / CVAE hyperparameters (forwarded to src/train_vae.py) ---
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=0.003,
+        help="VAE/CVAE: target KL weight in the ELBO (default 0.003, anti-collapse)."
+    )
+    parser.add_argument(
+        "--kl-anneal-epochs",
+        type=int,
+        default=20,
+        help="VAE/CVAE: epochs to linearly ramp beta from 0 (0 disables annealing)."
+    )
+    parser.add_argument(
+        "--free-bits",
+        type=float,
+        default=0.0,
+        help="VAE/CVAE: per-dimension KL floor (nats) to mitigate posterior collapse."
+    )
+    parser.add_argument(
+        "--prior",
+        type=str,
+        default="standard",
+        choices=["standard", "conditional"],
+        help="VAE/CVAE latent prior: 'standard' N(0,I) or 'conditional' per-age Gaussian."
+    )
+    parser.add_argument(
+        "--cond-dim",
+        type=int,
+        default=16,
+        help="CVAE: width of the learned session-age condition embedding."
+    )
     parser.add_argument(
         "--norm_mode",
         type=str,
@@ -299,8 +357,10 @@ if __name__ == "__main__":
         "--aug_mode",
         type=str,
         default="legacy",
-        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving"],
-        help="Augmentation strategy forwarded to train_simclr.py (legacy|zone_preserving)."
+        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving",
+                 "psd_ftsurrogate", "psd_smoothmask", "psd_signflip", "psd_timereverse", "psd_top2"],
+        help="Augmentation strategy forwarded to train_simclr.py "
+             "(legacy|zone_preserving|psd_* fine-ablation modes)."
     )
     parser.add_argument(
         "--positives",

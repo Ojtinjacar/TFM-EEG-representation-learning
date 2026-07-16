@@ -848,15 +848,75 @@ def compute_similarity_matrix(methods_dict):
 
     return sim_matrix.astype(float)
 
-def split_dataset(X, train_percentaje=0.8):
+CANONICAL_AGES = (6, 9, 16, 36)
+"""Tuple[int, ...]: Canonical session ages (months) used as CVAE conditions.
+
+Fixed and ordered so the condition index space is identical in training and
+downstream, guaranteeing that condition embeddings and conditional-prior tables
+keep matching shapes across runs.
+"""
+
+
+def ages_to_indices(ages):
+    """Maps session ages to canonical condition indices in ``CANONICAL_AGES``.
+
+    Args:
+        ages (Iterable): Per-window session ages (numeric, may be floats).
+
+    Returns:
+        numpy.ndarray: Condition indices of dtype int64, shape (N,).
+
+    Raises:
+        ValueError: If any age is not one of ``CANONICAL_AGES``.
     """
-    Converts a NumPy array to a Torch tensor and splits it into train/val.
+    lut = {age: i for i, age in enumerate(CANONICAL_AGES)}
+    indices = []
+    for a in ages:
+        key = int(round(float(a)))
+        if key not in lut:
+            raise ValueError(
+                f"Age {a!r} is not in the canonical ages {CANONICAL_AGES}."
+            )
+        indices.append(lut[key])
+    return np.array(indices, dtype=np.int64)
+
+
+def split_dataset(X, train_percentaje=0.8, cond=None):
+    """Converts a NumPy array to a Torch tensor and splits it into train/val.
+
+    Builds a ``TensorDataset`` whose input is also the target (reconstruction). When a
+    per-window condition is provided (e.g. session age for a CVAE), it is carried as a
+    third tensor aligned with the windows, so ``random_split`` keeps each
+    ``(x, x, cond)`` triple together despite shuffling the indices.
+
+    Args:
+        X (numpy.ndarray): Windows of shape (N, C, T).
+        train_percentaje (float): Fraction of samples assigned to the train split.
+        cond (numpy.ndarray, optional): Per-window condition indices of shape (N,).
+            When given, each dataset item becomes ``(x, x, cond)``.
+
+    Returns:
+        list[torch.utils.data.Subset]: The train and validation subsets.
+
+    Raises:
+        ValueError: If ``cond`` is provided but its length does not match ``X``.
     """
     data = torch.tensor(X, dtype=torch.float32)  # (N, C, T)
 
     train_size = int(train_percentaje * X.shape[0])
     val_size = X.shape[0] - train_size
-    return random_split(TensorDataset(data, data), [train_size, val_size])
+
+    if cond is None:
+        dataset = TensorDataset(data, data)
+    else:
+        if len(cond) != X.shape[0]:
+            raise ValueError(
+                f"cond length ({len(cond)}) must match number of windows ({X.shape[0]})."
+            )
+        cond_tensor = torch.as_tensor(cond, dtype=torch.long)  # (N,)
+        dataset = TensorDataset(data, data, cond_tensor)
+
+    return random_split(dataset, [train_size, val_size])
 
 
 def create_dataloader(train_data, val_data, batch_size=128):

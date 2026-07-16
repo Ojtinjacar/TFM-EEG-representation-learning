@@ -111,6 +111,18 @@ class CIMCYCDataset(Dataset):
     #   no_swap           dropout              legacy temporal              -> isolates removing swap
     #   legacy_plus_psd   dropout + swap       PSD-preserving pool          -> isolates adding new augs
     #   zone_preserving   dropout              PSD-preserving pool          -> both
+    #
+    # Fine PSD ablation (Experiment: isolate which PSD transform drives the gain). Each
+    # add-one mode holds the spatial pool at dropout only and applies a SINGLE temporal/freq
+    # transform, so its downstream score attributes the effect to that transform alone.
+    # psd_top2 keeps only the two winners of the ablation (edit the pair after Phase A).
+    #
+    #   mode              spatial pool         temporal/freq pool
+    #   psd_ftsurrogate   dropout              FTSurrogate only
+    #   psd_smoothmask    dropout              SmoothTimeMask only
+    #   psd_signflip      dropout              SignFlip only
+    #   psd_timereverse   dropout              TimeReverse only
+    #   psd_top2          dropout              two winners (default FTSurrogate + TimeReverse)
     # ------------------------------------------------------------------
     def _pools_for_mode(self):
         dropout = [self.apply_channel_dropout]
@@ -124,10 +136,17 @@ class CIMCYCDataset(Dataset):
             self.apply_sign_flip,
             self.apply_time_reverse,
         ]
+        # Provisional winners; replace with the two best add-one transforms after Phase A.
+        top2_temporal = [self.apply_ft_surrogate, self.apply_time_reverse]
         pools = {
             "no_swap": (dropout, legacy_temporal),
             "legacy_plus_psd": (dropout_swap, psd_temporal),
             "zone_preserving": (dropout, psd_temporal),
+            "psd_ftsurrogate": (dropout, [self.apply_ft_surrogate]),
+            "psd_smoothmask": (dropout, [self.apply_smooth_time_mask]),
+            "psd_signflip": (dropout, [self.apply_sign_flip]),
+            "psd_timereverse": (dropout, [self.apply_time_reverse]),
+            "psd_top2": (dropout, top2_temporal),
         }
         return pools[self.aug_mode]
 
@@ -407,12 +426,15 @@ if __name__ == "__main__":
         "--aug_mode",
         type=str,
         default="legacy",
-        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving"],
+        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving",
+                 "psd_ftsurrogate", "psd_smoothmask", "psd_signflip", "psd_timereverse", "psd_top2"],
         help=(
             "Augmentation strategy: 'legacy' (original: channel dropout/swap + "
             "time shift/gaussian/zero-mask); 'zone_preserving' (drops channel swap, adds "
             "PSD-preserving transforms FTSurrogate/SmoothTimeMask/SignFlip/TimeReverse and "
-            "enables the correlation validation). Used for view1 when --positives neighbor."
+            "enables the correlation validation). The 'psd_*' modes are the fine ablation: "
+            "dropout + a single transform ('psd_top2' = the two winners). "
+            "Used for view1 when --positives neighbor."
         )
     )
     parser.add_argument(

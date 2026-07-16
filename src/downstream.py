@@ -11,7 +11,45 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.decomposition import PCA
 
-from models import EnhancedAttentionLSTM, AttentionLSTMAutoencoder, MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder
+from models import (
+    EnhancedAttentionLSTM,
+    AttentionLSTMAutoencoder,
+    MaskedAttentionLSTMAutoencoder,
+    VariationalAttentionLSTMAutoencoder,
+    ConditionalVariationalAttentionLSTMAutoencoder,
+)
+from utils import CANONICAL_AGES, ages_to_indices
+
+
+def cvae_condition_usage_check(backbone, X_windows, ages, device, n_samples=128):
+    """Sanity check: does the CVAE actually use the age condition?
+
+    Reconstructs a batch with the true session age vs. a deliberately wrong age and
+    compares reconstruction MSE. If the model uses the condition, the true-age
+    reconstruction should be clearly better (lower MSE). This is a printed diagnostic;
+    it does not affect the probe metrics.
+
+    Args:
+        backbone (ConditionalVariationalAttentionLSTMAutoencoder): Loaded CVAE.
+        X_windows (numpy.ndarray): Windows (N, C, T).
+        ages (array-like): Per-window session ages aligned with ``X_windows``.
+        device (torch.device): Compute device.
+        n_samples (int): Number of windows to sample for the check.
+    """
+    n = min(n_samples, len(X_windows))
+    x = torch.tensor(X_windows[:n], dtype=torch.float32, device=device)
+    cond = torch.as_tensor(ages_to_indices(ages[:n]), dtype=torch.long, device=device)
+    # Every window gets a genuinely different age (next canonical age, cyclically).
+    wrong = (cond + 1) % backbone.n_conditions
+    backbone.eval()
+    with torch.no_grad():
+        rec_true, _, _, _ = backbone(x, cond)
+        rec_wrong, _, _, _ = backbone(x, wrong)
+        mse_true = torch.mean((rec_true - x) ** 2).item()
+        mse_wrong = torch.mean((rec_wrong - x) ** 2).item()
+    verdict = "USES condition" if mse_true < mse_wrong else "condition WEAK/IGNORED (or untrained)"
+    print(f"[CVAE cond-check] recon MSE true-age={mse_true:.6f} vs wrong-age={mse_wrong:.6f} "
+          f"-> {verdict}")
 
 # ============================
 #   DATASETS
@@ -340,19 +378,19 @@ def main(args):
         test_subjects=args.test_subjects
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
 
         embedding_size = args.embedding_size
-        
+
         # 1) Load pre-trained backbone
         model_params = {
-            "input_size": X.shape[2], 
-            "hidden_size": embedding_size, 
+            "input_size": X.shape[2],
+            "hidden_size": embedding_size,
             "n_channels": X.shape[1],
-            "sfreq": args.sampling_frequency, 
+            "sfreq": args.sampling_frequency,
             "lstm_hidden_size": embedding_size // 2,
         }
 
@@ -361,13 +399,41 @@ def main(args):
             "AE": AttentionLSTMAutoencoder,
             "MAE": MaskedAttentionLSTMAutoencoder,
             "TripletLoss": EnhancedAttentionLSTM,
-            "VAE": VariationalAttentionLSTMAutoencoder
+            "VAE": VariationalAttentionLSTMAutoencoder,
+            "CVAE": ConditionalVariationalAttentionLSTMAutoencoder,
         }
         model_class = model_map.get(args.method)
-        
+
+        # The CVAE needs the condition sizes to rebuild the same architecture; they
+        # must match the values used at training (canonical ages, default cond_dim).
+        if args.method == "CVAE":
+            model_params = {
+                **model_params,
+                "n_conditions": len(CANONICAL_AGES),
+                "cond_dim": args.cond_dim,
+            }
+
         backbone = model_class(**model_params).to(device)
-        backbone.load_state_dict(torch.load(args.model_path, map_location=device))
+        # strict=False tolerates the (unused-for-probing) prior submodule keys, which
+        # may or may not be present depending on the prior used at training.
+        strict = args.method not in ["VAE", "CVAE"]
+        missing, unexpected = backbone.load_state_dict(
+            torch.load(args.model_path, map_location=device), strict=strict
+        )
+        if missing or unexpected:
+            print(f"[WARN] load_state_dict non-strict: missing={list(missing)}, "
+                  f"unexpected={list(unexpected)}")
         print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
+
+        # Sanity check: verify the CVAE actually exploits the age condition. It is only
+        # a diagnostic print, so a failure here must never abort the actual evaluation.
+        if args.method == "CVAE" and "age" in meta_df.columns:
+            try:
+                cvae_condition_usage_check(
+                    backbone, X_task, meta_df.loc[mask, "age"].values, device
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostic must not break the run
+                print(f"[WARN] CVAE condition check skipped: {exc}")
 
         # 2) Build full model and optionally freeze backbone
         head = Head(embedding_size, 1).to(device)
@@ -580,7 +646,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "CVAE"],
         required=True,
         help="Method to use."
     )
@@ -589,6 +655,12 @@ if __name__ == "__main__":
         type=str,
         default="age",
         help="Objective variable"
+    )
+    parser.add_argument(
+        "--cond-dim",
+        type=int,
+        default=16,
+        help="CVAE only: width of the session-age condition embedding (must match training)."
     )
     parser.add_argument(
         "--eval_mode",
