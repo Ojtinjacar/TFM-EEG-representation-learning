@@ -61,7 +61,9 @@ def extract_embeddings(model, X: np.ndarray, device, batch_size: int = 256) -> n
     model.eval()
     out = []
     for start in range(0, len(X), batch_size):
-        batch = torch.as_tensor(X[start:start + batch_size], dtype=torch.float32, device=device)
+        # np.array forces a writable copy: slices of a read-only memmap otherwise make torch warn.
+        chunk = np.array(X[start:start + batch_size], dtype=np.float32)
+        batch = torch.as_tensor(chunk, device=device)
         out.append(model.get_embedding(batch).cpu().numpy())
     return np.concatenate(out, axis=0)
 

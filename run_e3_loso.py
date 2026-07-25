@@ -47,17 +47,20 @@ def load_data() -> tuple[np.ndarray, pd.DataFrame, np.ndarray]:
     return X, meta, F
 
 
-def pretrain_fold(subject: str, epochs: int, features: Path, tag: str) -> Path:
+def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int = 42) -> Path:
     """Pre-trains one ExpCLR encoder excluding a subject, and returns its checkpoint path.
 
-    The fold id carries the held-out subject and a tag, so checkpoints of different variants or
-    targets can never collide, which is a defect the shared orchestrator has.
+    The fold id carries the held-out subject, a tag, the epoch count and the seed, so checkpoints
+    of different variants, targets, training budgets or seeds can never collide. Checkpoint reuse
+    is keyed on that path, so leaving any of them out would silently resume a sweep with encoders
+    trained under different settings.
 
     Args:
         subject: Subject held out for testing.
         epochs: Training epochs.
         features: Descriptor matrix to guide the loss.
         tag: Short label distinguishing the variant.
+        seed: Seed for the encoder initialisation and the batch order.
 
     Returns:
         Path of the written checkpoint.
@@ -65,7 +68,7 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str) -> Path:
     Raises:
         RuntimeError: If the training subprocess fails or the checkpoint does not appear.
     """
-    fold_id = f"loso_{tag}_{subject}"
+    fold_id = f"loso_{tag}_e{epochs}_s{seed}_{subject}"
     ckpt = Path("save/models") / (
         f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_0.005_tau_1.0_delta_1.0.pth")
     if ckpt.exists():
@@ -73,7 +76,7 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str) -> Path:
     cmd = [sys.executable, "src/train_expclr.py",
            "--data_path", str(DATA), "--expert_features", str(features),
            "--descriptor", "P_diverso", "--zone", "all", "--frequency", "all",
-           "--fold_id", fold_id, "--num_epochs", str(epochs),
+           "--fold_id", fold_id, "--num_epochs", str(epochs), "--seed", str(seed),
            "--exclude_subjects", subject]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not ckpt.exists():
@@ -105,13 +108,72 @@ def build_encoder(X: np.ndarray, device, checkpoint: Path | None, seed: int = 0)
     return model
 
 
-def run_loso(methods: list[str], epochs: int, device) -> dict[str, pd.DataFrame]:
+class EmbeddingCache:
+    """Extracts frozen embeddings once per encoder and reuses them across methods and folds.
+
+    Two savings, both exact rather than approximate:
+
+    1. Within a fold, ExpCLR and B7 read the same pre-trained encoder, so one forward pass serves
+       both instead of two identical ones.
+    2. Across folds, B2's encoder is randomly initialised from a fixed seed and never trained, so
+       its embeddings are the same in every fold and are computed once for the whole sweep.
+
+    Caching is keyed on the checkpoint path, which encodes the variant, the held-out subject and
+    the epoch budget, so two different encoders can never share an entry. Each matrix is a few
+    megabytes, so nothing is evicted.
+    """
+
+    def __init__(self, X: np.ndarray, device, random_seed: int = 42) -> None:
+        """Initialises an empty cache over a fixed set of windows.
+
+        Args:
+            X: Window tensor. Wrapped with ``np.asarray`` once; on a memmap this is a view, so it
+                costs no memory and avoids re-wrapping it on every extraction.
+            device: Torch device.
+            random_seed: Seed of B2's untrained encoder. It is part of the cache key, so encoders
+                drawn from different seeds cannot share an entry.
+        """
+        self._X = np.asarray(X)
+        self._device = device
+        self._random_seed = random_seed
+        self._embeddings: dict[str, np.ndarray] = {}
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, checkpoint: Path | None) -> np.ndarray:
+        """Returns the embeddings of one encoder, computing them only the first time.
+
+        Args:
+            checkpoint: Weights to load, or None for the fixed-seed random encoder of B2.
+
+        Returns:
+            Embedding matrix of shape (n_windows, embedding_dim).
+        """
+        key = str(checkpoint) if checkpoint is not None else f"__random_s{self._random_seed}__"
+        cached = self._embeddings.get(key)
+        if cached is not None:
+            self._hits += 1
+            return cached
+        self._misses += 1
+        model = build_encoder(self._X, self._device, checkpoint, seed=self._random_seed)
+        self._embeddings[key] = extract_embeddings(model, self._X, self._device)
+        return self._embeddings[key]
+
+    @property
+    def stats(self) -> dict[str, int]:
+        """Returns how many extractions were reused versus actually computed."""
+        return {"hits": self._hits, "misses": self._misses}
+
+
+def run_loso(methods: list[str], epochs: int, device, seed: int = 42) -> dict[str, pd.DataFrame]:
     """Runs leave-one-subject-out for every requested method, sharing folds and probe.
 
     Args:
         methods: Method identifiers to evaluate.
         epochs: Pre-training epochs for the methods that need an encoder.
         device: Torch device.
+        seed: Seed shared by every fold, so what varies across folds is the held-out subject and
+            not the initialisation.
 
     Returns:
         Mapping from method name to its out-of-fold session-level predictions.
@@ -125,9 +187,10 @@ def run_loso(methods: list[str], epochs: int, device) -> dict[str, pd.DataFrame]
     shuffled_path = FEATURES.with_name("expert_features_P_diverso_shuffled.npy")
     if "B3" in methods and not shuffled_path.exists():
         # B3: same descriptor, permuted across windows. Isolates the geometry from the loss shape.
-        rng = np.random.default_rng(0)
+        rng = np.random.default_rng(seed)
         np.save(shuffled_path, F[rng.permutation(len(F))])
 
+    cache = EmbeddingCache(X, device, random_seed=seed)
     preds: dict[str, list[pd.DataFrame]] = {m: [] for m in methods}
     for i, subject in enumerate(subjects, 1):
         t0 = time.time()
@@ -143,22 +206,21 @@ def run_loso(methods: list[str], epochs: int, device) -> dict[str, pd.DataFrame]
                 if method == "B1":
                     Xtr, Xte = F[train], F[test]
                 else:
-                    ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr")
-                    emb = extract_embeddings(build_encoder(X, device, ckpt), np.asarray(X), device)
+                    emb = cache.get(pretrain_fold(subject, epochs, FEATURES, "expclr", seed))
                     Xtr = np.hstack([emb[train], F[train]])
                     Xte = np.hstack([emb[test], F[test]])
                 scaler, probe = fit_probe(Xtr, y[train], groups[train])
                 pred_test = probe.predict(scaler.transform(Xte))
             else:                                   # métodos con encoder
                 if method == "ExpCLR":
-                    ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr")
+                    ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr", seed)
                 elif method == "B3":
-                    ckpt = pretrain_fold(subject, epochs, shuffled_path, "shuffled")
+                    ckpt = pretrain_fold(subject, epochs, shuffled_path, "shuffled", seed)
                 elif method == "B2":
                     ckpt = None                     # encoder aleatorio
                 else:
                     raise ValueError(f"metodo desconocido: {method}")
-                emb = extract_embeddings(build_encoder(X, device, ckpt), np.asarray(X), device)
+                emb = cache.get(ckpt)
                 scaler, probe = fit_probe(emb[train], y[train], groups[train])
                 pred_test = probe.predict(scaler.transform(emb[test]))
 
@@ -166,6 +228,8 @@ def run_loso(methods: list[str], epochs: int, device) -> dict[str, pd.DataFrame]
 
         print(f"  [{i:2d}/{len(subjects)}] {subject}  {time.time()-t0:5.1f}s", flush=True)
 
+    stats = cache.stats
+    print(f"embeddings: {stats['misses']} extracciones, {stats['hits']} reutilizadas", flush=True)
     return {m: pd.concat(v, ignore_index=True) for m, v in preds.items() if v}
 
 
@@ -177,6 +241,9 @@ def main() -> None:
                         default=["ExpCLR", "B0", "B1", "B2", "B7"],
                         help="ExpCLR, B0 media, B1 Ridge sobre descriptor, B2 encoder aleatorio, "
                              "B3 descriptor permutado, B7 embedding+descriptor.")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Semilla compartida por los 45 folds: lo que varia entre folds es el "
+                             "sujeto excluido, no la inicializacion.")
     args = parser.parse_args()
 
     device = torch.device("mps" if torch.backends.mps.is_available()
@@ -184,7 +251,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"device: {device} | epocas: {args.epochs} | metodos: {args.methods}")
 
-    results = run_loso(args.methods, args.epochs, device)
+    results = run_loso(args.methods, args.epochs, device, args.seed)
 
     rows = []
     for method, sessions in results.items():

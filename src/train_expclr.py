@@ -20,6 +20,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -109,6 +110,24 @@ def prepare_descriptor(features, *, quality=None, min_r2=None):
     return F, keep
 
 
+def set_seed(seed):
+    """Seeds every source of randomness that affects the trained encoder.
+
+    Without this the encoder's initialisation and the batch order depend on torch's global state,
+    so two runs of the same fold produce different weights and a small difference between methods
+    could be attributed to the initialisation rather than to the method.
+
+    ``torch.manual_seed`` covers the CPU and the accelerator (CUDA and MPS) generators. The
+    DataLoader needs its own explicit generator, which :func:`main` passes in.
+
+    Args:
+        seed: Seed applied to ``random``, ``numpy`` and ``torch``.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def max_pairwise_distance(F, *, max_samples=4096, seed=42):
     """Computes ``max_kl ||f_k - f_l||`` over the training descriptor.
 
@@ -129,12 +148,25 @@ def max_pairwise_distance(F, *, max_samples=4096, seed=42):
         return float(torch.cdist(t, t, p=2).max().item())
 
 
+#: Smallest batch whose backward pass works on MPS. ``torch.cdist``, which the ExpCLR loss uses for
+#: both the descriptor and the embedding distances, switches to a matmul implementation once the
+#: input has more than 25 rows. Only that path has a backward on MPS; the direct kernel raises
+#: NotImplementedError for ``aten::_cdist_backward``. The paper's batch size of 64 is safely above.
+MIN_BATCH_SIZE_ON_MPS = 26
+
+
 def main(args):
     device = torch.device(
         "mps" if torch.backends.mps.is_available()
         else "cuda" if torch.cuda.is_available()
         else "cpu"
     )
+    if device.type == "mps" and args.batch_size < MIN_BATCH_SIZE_ON_MPS:
+        raise ValueError(
+            f"batch_size={args.batch_size} is below {MIN_BATCH_SIZE_ON_MPS} and torch.cdist has no "
+            f"backward on MPS under that size. Raise the batch size or export "
+            f"PYTORCH_ENABLE_MPS_FALLBACK=1 to fall back to CPU for that operator."
+        )
     print(f"Using device: {device}")
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -179,8 +211,11 @@ def main(args):
         feat_max_dist = max_pairwise_distance(F_np)
         print(f"max_kl ||f_k - f_l|| over train: {feat_max_dist:.4f}")
 
+    # Seeded before the loader and the model, the two consumers of torch's global RNG.
+    set_seed(args.seed)
     dataset = ExpertFeatureDataset(X, F)
-    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+                              generator=torch.Generator().manual_seed(args.seed))
 
     model = EnhancedAttentionLSTM(
         input_size=X.shape[2],
@@ -271,6 +306,10 @@ if __name__ == "__main__":
     parser.add_argument("--zone", default="all", help="Brain zone (naming only).")
     parser.add_argument("--frequency", default="all", help="Frequency band (naming only).")
     parser.add_argument("--fold_id", default="", help="Fold identifier for the checkpoint name.")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Seed for the encoder initialisation and the batch order. The same "
+                             "value is used for every fold, so what varies across folds is the "
+                             "held-out subject and not the starting point of the optimisation.")
     parser.add_argument("--exclude_subjects", nargs="*", default=[],
                         help="Subjects held out for testing in this fold.")
     parser.add_argument("--sampling_frequency", type=int, default=250, help="Sampling rate (Hz).")
