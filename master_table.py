@@ -9,6 +9,7 @@ DIRS = [
     "results_neighbor",
     "results_ablation",
     "results_vae",
+    "results_expclr",
 ]
 frames = []
 for d in DIRS:

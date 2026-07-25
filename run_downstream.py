@@ -12,7 +12,7 @@ from sklearn.metrics import r2_score
 # Configuration of experiments
 # Methods to run for each evaluation mode
 LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
-FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP"]
+FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
 
 # ExpCLR (E3) hyperparameters. They are kept here as constants because run_pretraining must
 # rebuild the checkpoint filename that src/train_expclr.py writes, character for character.
