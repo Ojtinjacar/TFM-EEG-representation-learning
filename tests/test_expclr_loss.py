@@ -463,3 +463,69 @@ def test_effective_dimensionality_survives_a_diverged_encoder():
     assert np.isnan(effective_dimensionality(z))
     z = np.ones((10, 4)) * np.inf
     assert np.isnan(effective_dimensionality(z))
+
+
+def test_delta_star_approaches_one_as_distances_concentrate():
+    """Why the paper can fix Delta = 1 and we cannot: distance concentration.
+
+    ``Delta* = 1 / E[1 - s_ij]`` is the margin that matches the target's row mean to the 1 that
+    mu_i imposes. As the descriptor's effective dimension grows, pairwise distances concentrate,
+    ``d_mean / d_max`` tends to 1, similarities tend to 0 and Delta* tends to 1 on its own. The
+    paper's descriptors have 29, 176 and 561 dimensions, which is why Delta = 1 is their empirical
+    optimum (Fig. 4). A correlated descriptor of low effective dimension pushes Delta* well above 1.
+    """
+    rng = np.random.default_rng(0)
+    device = torch.device("cpu")
+
+    def delta_star(matrix):
+        max_dist = float(torch.cdist(matrix, matrix, p=2).max())
+        criterion = ExpCLRLoss(device, feat_max_dist=max_dist, temperature=None)
+        return 1.0 / float((1.0 - criterion.expert_similarity(matrix[:64])).mean())
+
+    values = [delta_star(torch.tensor(rng.normal(size=(600, d)), dtype=torch.float32))
+              for d in (10, 40, 200, 600)]
+    # Monotonically closer to 1 as the dimension grows.
+    assert all(a >= b for a, b in zip(values, values[1:])), values
+    assert values[-1] == pytest.approx(1.0, abs=0.1), "en dimension alta Delta* deberia rondar 1"
+    assert values[0] > values[-1], "en dimension baja Delta* deberia ser claramente mayor"
+
+
+def test_loss_is_invariant_to_rescaling_the_embedding():
+    """Why the paper's bilipschitz bounds are not measurable on this implementation.
+
+    Normalising by mu_i cancels any global factor: E -> cE leaves D_ij untouched. The loss
+    therefore constrains only the *shape* of the embedding cloud, never its scale, so the constants
+    l_- and l_+ of Prop. 2 are indeterminate here. That is the reason the geometry is diagnosed
+    with effective dimensionality, a scale-free quantity, instead of with the bounds of App. D.
+    """
+    generator = torch.Generator().manual_seed(3)
+    z = torch.randn(32, 16, dtype=torch.float64, generator=generator)
+    f = torch.randn(32, 8, dtype=torch.float64, generator=generator)
+    criterion = ExpCLRLoss(torch.device("cpu"), feat_max_dist=10.0, temperature=None)
+
+    reference = float(criterion(z, f))
+    for scale in (1e-3, 0.5, 2.0, 1e3):
+        assert float(criterion(z * scale, f)) == pytest.approx(reference, rel=1e-9), (
+            f"la perdida deberia ser invariante al reescalado, falla con c={scale}")
+
+
+def test_zero_loss_is_unreachable_at_delta_one():
+    """Prop. 2 assumes L_quad = 0, which mu-normalisation makes impossible at Delta = 1.
+
+    Each row of D sums to exactly N, while the target row sums to at most Delta*(N-1) because
+    s_ii = 1 zeroes the diagonal term. So a perfect fit needs Delta >= N/(N-1), and the guarantee
+    the proposition offers cannot be invoked with the paper's Delta = 1.
+    """
+    generator = torch.Generator().manual_seed(4)
+    n = 32
+    z = torch.randn(n, 16, dtype=torch.float64, generator=generator)
+    f = torch.randn(n, 8, dtype=torch.float64, generator=generator)
+    criterion = ExpCLRLoss(torch.device("cpu"), delta=1.0, feat_max_dist=10.0, temperature=None)
+
+    row_sums_of_d = criterion.normalized_distance(z).sum(dim=1)
+    assert torch.allclose(row_sums_of_d, torch.full((n,), float(n), dtype=torch.float64),
+                          atol=1e-6)
+
+    target = (1.0 - criterion.expert_similarity(f)) * criterion.delta
+    assert target.sum(dim=1).max() <= n - 1 + 1e-6, "la diana no puede sumar mas de Delta*(N-1)"
+    assert float(criterion(z, f)) > 0.0

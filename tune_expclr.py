@@ -41,7 +41,7 @@ from eval_expclr import (  # noqa: E402
 from loss import ExpCLRLoss  # noqa: E402
 from models import EnhancedAttentionLSTM  # noqa: E402
 from train_expclr import (  # noqa: E402
-    effective_dimensionality, max_pairwise_distance, prepare_descriptor,
+    checkpoint_is_reusable, effective_dimensionality, max_pairwise_distance, prepare_descriptor,
 )
 
 DATA = Path("data/processed/all_all")
@@ -58,6 +58,14 @@ LR_GRID = [5e-5, 1e-4, 5e-4, 1e-3, 3e-3, 5e-3, 7e-3, 1e-2]
 #: The rate the paper selects for ExpCLR on the two EEG-like datasets, SleepEDF and Waveform
 #: (Tab. 9). Used as the fixed rate while the Delta axis is explored.
 PAPER_LR = 5e-3
+
+#: Temperatures of the hard-negative-mining ablation (Fig. 2, right panel). Restricted to the lower
+#: half of the paper's grid because that is where the authors themselves report a gain: "other
+#: tau < 1.0 could improve the performance slightly" (App. B.4), and their figure shows accuracy
+#: decreasing monotonically from tau = 0.5 to tau = 100. Smaller tau concentrates the gradient on
+#: the worst-fitting pairs; with batches of 64 drawn from highly correlated subjects its effect need
+#: not match the paper's.
+TAU_GRID = [0.5, 0.7, 1.0, 2.0]
 
 #: Fraction of subjects held out to score configurations, matching the paper's 80/20 split (p. 6).
 VALIDATION_FRACTION = 0.2
@@ -115,7 +123,7 @@ def split_subjects(subjects: np.ndarray, seed: int = 42) -> tuple[list[str], lis
 
 
 def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[str],
-              seed: int) -> Path | None:
+              seed: int, tau: float = 1.0) -> Path | None:
     """Pre-trains one configuration, excluding the validation subjects.
 
     Args:
@@ -125,25 +133,30 @@ def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[
         epochs: Training epochs.
         holdout: Validation subjects, excluded from pre-training.
         seed: Seed for reproducibility.
+        tau: Hard-negative-mining temperature under test.
 
     Returns:
         Checkpoint path, or None if training failed.
     """
-    fold_id = f"tune_d{delta}_lr{lr}_{sim_max}_e{epochs}_s{seed}"
+    fold_id = f"tune_d{delta}_lr{lr}_t{tau}_{sim_max}_e{epochs}_s{seed}"
     ckpt = Path("save/models") / (
-        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_1.0_delta_{delta}.pth")
-    if ckpt.exists():
+        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
+    if checkpoint_is_reusable(ckpt, {"delta": delta, "lr": lr, "temperature": tau,
+                                     "sim_max": sim_max, "loss_on": "projection",
+                                     "dropout": 0.0, "num_epochs": epochs, "seed": seed}):
         return ckpt
     cmd = [sys.executable, "src/train_expclr.py",
            "--data_path", str(DATA), "--expert_features", str(FEATURES),
            "--descriptor", "P_diverso", "--zone", "all", "--frequency", "all",
            "--fold_id", fold_id, "--num_epochs", str(epochs), "--seed", str(seed),
-           "--delta", str(delta), "--lr", str(lr), "--loss_on", "embedding",
+           "--delta", str(delta), "--lr", str(lr), "--temperature", str(tau),
+           "--loss_on", "projection", "--dropout", "0.0",
            "--sim_max", sim_max, "--diagnose_every", str(max(1, epochs // 4)),
            "--exclude_subjects", *holdout]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not ckpt.exists():
-        print(f"  fallo delta={delta} lr={lr} sim_max={sim_max}: {res.stderr.strip()[-300:]}")
+        print(f"  fallo delta={delta} lr={lr} tau={tau} sim_max={sim_max}: "
+              f"{res.stderr.strip()[-300:]}")
         return None
     return ckpt
 
@@ -169,7 +182,7 @@ def score(ckpt: Path | None, X, meta, y, groups, val_mask, device, random_seed: 
         # baseline moves by sd = 0.024 in R2, comparable to the effects being chased.
         torch.manual_seed(random_seed)
     model = EnhancedAttentionLSTM(input_size=X.shape[2], hidden_size=128, n_channels=X.shape[1],
-                                  sfreq=250, lstm_hidden_size=64).to(device)
+                                  sfreq=250, lstm_hidden_size=64, dropout=0.0).to(device)
     if ckpt is not None:
         model.load_state_dict(torch.load(ckpt, map_location=device))
     emb = extract_embeddings(model, X, device)
@@ -219,24 +232,25 @@ def main() -> None:
 
     rows = []
 
-    def evaluate(delta, lr, sim_max, stage, index, total):
+    def evaluate(delta, lr, sim_max, stage, index, total, tau=1.0):
         """Trains and scores one configuration, recording it in `rows`.
 
         Configurations whose metric is not finite are dropped rather than recorded: a diverged run
         would otherwise be picked as the winner by a comparison against NaN.
         """
         t0 = time.time()
-        ckpt = train_one(delta, lr, sim_max, args.epochs, val_subjects, args.seed)
+        ckpt = train_one(delta, lr, sim_max, args.epochs, val_subjects, args.seed, tau)
         if ckpt is None:
             return None
         result = score(ckpt, X, meta, y, groups, val_mask, device, args.seed)
+        label = f"delta={delta:<5} lr={lr:<7} tau={tau:<4} {sim_max:<5}"
         if not np.isfinite(result["mae"]):
-            print(f"  [{stage} {index:2d}/{total}] delta={delta:<5} lr={lr:<7} {sim_max:<5} "
+            print(f"  [{stage} {index:2d}/{total}] {label} "
                   f"DESCARTADA (metrica no finita, probable divergencia)", flush=True)
             return None
-        rows.append({"stage": stage, "delta": delta, "lr": lr, "sim_max": sim_max,
+        rows.append({"stage": stage, "delta": delta, "lr": lr, "tau": tau, "sim_max": sim_max,
                      "is_suggested": abs(delta - suggested[sim_max]) < 0.01, **result})
-        print(f"  [{stage} {index:2d}/{total}] delta={delta:<5} lr={lr:<7} {sim_max:<5} "
+        print(f"  [{stage} {index:2d}/{total}] {label} "
               f"MAE={result['mae']:5.2f} R2={result['r2']:+.3f} "
               f"dim={result['effective_dim']:5.2f} ({time.time() - t0:.0f}s)", flush=True)
         return result
@@ -266,6 +280,15 @@ def main() -> None:
         for i, lr in enumerate(lrs, 1):
             evaluate(best1["delta"], lr, best1["sim_max"], "2", i, len(lrs))
 
+        # Etapa 3: temperatura. El paper declara que su propio tau=1 no es optimo ("other tau < 1.0
+        # could improve the performance slightly", App. B.4) y su Fig. 2 lo confirma.
+        best2 = min(rows, key=lambda r: r["mae"])
+        taus = [t for t in TAU_GRID if t != 1.0]
+        print(f"\nEtapa 3: {len(taus)} temperaturas con delta={best2['delta']}, "
+              f"lr={best2['lr']}, sim_max={best2['sim_max']}")
+        for i, tau in enumerate(taus, 1):
+            evaluate(best2["delta"], best2["lr"], best2["sim_max"], "3", i, len(taus), tau)
+
     table = pd.DataFrame(rows).sort_values("mae")
     table.to_csv(OUT / "tuning_results.csv", index=False)
     best = table.iloc[0]
@@ -285,7 +308,8 @@ def main() -> None:
           f"metrica de validacion esta sesgada al alza por seleccion. La cifra reportable es la "
           f"del LOSO posterior sobre los sujetos restantes, no esta.")
 
-    json.dump({"delta": float(best.delta), "lr": float(best.lr), "sim_max": str(best.sim_max),
+    json.dump({"delta": float(best.delta), "lr": float(best.lr), "tau": float(best.tau),
+               "sim_max": str(best.sim_max),
                "delta_suggested": {k: float(v) for k, v in suggested.items()},
                "mae": float(best.mae), "r2": float(best.r2),
                "random_baseline_mae": float(baseline["mae"]),

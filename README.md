@@ -256,15 +256,29 @@ python src/train_expclr.py \
     --fold_id         fold0
 ```
 
-Defaults follow the paper: `tau = 1`, `Delta = 1`, batch 64, Adam with exponential decay
-`gamma = 0.99`, learning rate 5e-3. Ablation flags: `--no_hard_negative_mining` (the plain
-quadratic loss of Eq. 3), `--linear_similarity` (Eq. 2 instead of Eq. 5), `--sim_max batch`,
-`--descriptor P_madurativo|P_aper` and `--min_apsd_r2`.
+Most defaults follow the paper: `tau = 1`, batch 64, Adam with exponential decay `gamma = 0.99`,
+learning rate 5e-3. Two do **not**, deliberately:
+
+- **`Delta` must be tuned, not left at the paper's 1.** The mean-normalisation fixes every row mean
+  of `D_ij` at 1, while the target `(1 - s_ij) * Delta` averages 0.537 with our descriptor, so at
+  `Delta = 1` over 90 % of the loss is an irreducible bias and the optimum is the least informative
+  geometry available. Use `tune_expclr.py`. This is a declared deviation: the paper fixes `Delta`
+  on purpose, to avoid overfitting ExpCLR relative to its baselines (App. B.3).
+- **`--dropout` defaults to 0**, not to the repo's inherited 0.25. In the paper dropout is an
+  augmentation of the SimCLR baseline, never a regulariser of ExpCLR.
+
+Ablation flags: `--no_hard_negative_mining` (the plain quadratic loss of Eq. 3),
+`--linear_similarity` (Eq. 2 instead of Eq. 5), `--sim_max batch`, `--loss_on embedding` (the
+two-layers-shorter encoder), `--dropout 0.25`, `--descriptor P_madurativo|P_aper` and
+`--min_apsd_r2`.
 
 Saved as:
 `save/models/ExpCLR_<zone>_<frequency>_<fold_id>_<descriptor>_batch_<bs>_lr_<lr>_tau_<tau>_delta_<delta>.pth`,
-with a `_config.json` sidecar recording the descriptor dimension and the train-fitted
-`max_kl ||f_k - f_l||`.
+with a `_config.json` sidecar recording every setting reuse depends on. Checkpoints are reused only
+when that sidecar matches what is being asked for, never by path alone.
+
+**See [`docs/expclr.md`](docs/expclr.md)** for the algorithm explained equation by equation, why
+`Delta = 1` degenerates here, a map of the code and the full list of declared deviations.
 
 ---
 

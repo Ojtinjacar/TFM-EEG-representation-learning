@@ -20,13 +20,15 @@ E0-E2. The defects, and what this module does instead:
    metric is computed once over all sessions, with confidence intervals from a cluster bootstrap
    over subjects, since sessions of the same child are not independent.
 
-The representation used is ``get_embedding()``. Note this is *not* the SimCLR argument about ``h``
-beating ``z`` for linear evaluation: ExpCLR is precisely the method that drops the projection head,
-and the paper optimises ``E(x)`` -- the same representation it evaluates (Secs. 3.6, 4.2). So the
-training loss must be applied here too, which is why ``train_expclr.py`` defaults to
-``--loss_on embedding``. An earlier version of this pipeline trained on the projection and
-evaluated the embedding, shaping a geometry behind a non-invertible ReLU MLP that the probe never
-saw.
+The rule that matters is that the loss and the probe act on the **same** tensor, and that this
+tensor is the paper's ``E(x)``. In the paper ``E`` ends in a two-layer fully connected network --
+"we add a two-layer fully connected neural network on top of the ResNet base encoder to arrive at
+our backbone encoder network" (Sec. 4.2) -- so those layers belong inside ``E``, unlike SimCLR's
+discardable projection head. Here that maps to ``forward()``, which is why both this module and
+``train_expclr.py`` default to the projection. An earlier version trained on the projection but
+evaluated ``get_embedding()``, shaping a geometry behind a non-invertible ReLU MLP the probe never
+saw; a later one applied both to ``get_embedding()``, which fixed the mismatch but ran a
+two-layers-shorter encoder than the paper's.
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ import torch
 from scipy.stats import spearmanr
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GroupKFold
+from sklearn.neighbors import KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 
 #: Ridge penalties explored by the inner CV, matching the log-spaced grid used in the
@@ -47,29 +50,46 @@ SESSION_KEYS = ("subject", "age", "block")
 
 
 @torch.no_grad()
-def extract_embeddings(model, X: np.ndarray, device, batch_size: int = 256) -> np.ndarray:
+def extract_embeddings(model, X: np.ndarray, device, batch_size: int = 256,
+                       representation: str = "projection") -> np.ndarray:
     """Extracts frozen embeddings from a pre-trained encoder.
 
     Runs the encoder in ``eval()`` mode inside ``no_grad``, so BatchNorm uses its running
     statistics and dropout is disabled. Both are required for the probe to be deterministic and
     for the encoder to be genuinely frozen, which ``downstream.py`` does not guarantee.
 
+    The default is ``projection``, i.e. ``forward()``. This is *not* the SimCLR convention of
+    evaluating ``h`` rather than ``z``: ExpCLR has no discardable head, and the paper's encoder ends
+    in a two-layer fully connected network that is part of ``E`` -- "we add a two-layer fully
+    connected neural network on top of the ResNet base encoder to arrive at our backbone encoder
+    network" (Sec. 4.2). So the loss and the probe must both act on the output of those layers, and
+    ``train_expclr.py`` defaults to ``--loss_on projection`` to match. Passing ``embedding`` gives
+    the two-layers-shorter encoder, kept as an explicit ablation.
+
     Args:
-        model: Pre-trained encoder exposing ``get_embedding``.
+        model: Pre-trained encoder exposing ``forward`` and ``get_embedding``.
         X: Window tensor of shape (n_windows, n_channels, n_samples).
         device: Torch device.
         batch_size: Windows per forward pass.
+        representation: ``projection`` for the full encoder, ``embedding`` for the ablation. Must
+            match what the loss was applied to during pre-training.
 
     Returns:
         Embedding matrix of shape (n_windows, embedding_dim).
+
+    Raises:
+        ValueError: If ``representation`` is not one of the two accepted values.
     """
+    if representation not in ("projection", "embedding"):
+        raise ValueError(f"representation debe ser 'projection' o 'embedding', no {representation!r}")
     model.eval()
     out = []
     for start in range(0, len(X), batch_size):
         # np.array forces a writable copy: slices of a read-only memmap otherwise make torch warn.
         chunk = np.array(X[start:start + batch_size], dtype=np.float32)
         batch = torch.as_tensor(chunk, device=device)
-        out.append(model.get_embedding(batch).cpu().numpy())
+        z = model(batch) if representation == "projection" else model.get_embedding(batch)
+        out.append(z.cpu().numpy())
     return np.concatenate(out, axis=0)
 
 
@@ -112,6 +132,54 @@ def fit_probe(
         best_alpha = float(ALPHA_GRID[int(np.argmin(scores))])
 
     return scaler, Ridge(alpha=best_alpha).fit(Z, y_train)
+
+
+def fit_knn_probe(X_train: np.ndarray, y_train: np.ndarray, k: int = 1):
+    """Fits the nearest-neighbour probe the paper pairs with the linear one.
+
+    The paper evaluates every representation with a linear classifier *and* a KNN (k=1), and reads
+    the gap between them as a diagnostic: "we thus use the performance difference of the linear and
+    KNN (k = 1) classifier to investigate how well different classes are mapped into individual
+    well-separated clusters" (Sec. 4.2). That gap tests exactly what ExpCLR promises -- that the
+    embedding geometry mirrors the descriptor geometry -- and a linear probe alone cannot see it.
+    This is its regression counterpart.
+
+    Args:
+        X_train: Representation of the training windows.
+        y_train: Target per training window.
+        k: Neighbours. The paper uses 1.
+
+    Returns:
+        The fitted scaler and KNN regressor.
+    """
+    scaler = StandardScaler().fit(X_train)
+    return scaler, KNeighborsRegressor(n_neighbors=k).fit(scaler.transform(X_train), y_train)
+
+
+def subject_metrics(sessions: pd.DataFrame) -> dict[str, float]:
+    """Computes the subject-level metrics of the shared pipeline, for comparability with E0-E2.
+
+    Reproduces ``master_table.py:43-53``: predictions and targets are averaged per subject, then
+    nRMSE is the pooled RMSE over the standard deviation of the targets. Averaging visits months
+    apart is exactly the defect this module avoids elsewhere, so these numbers are reported
+    *alongside* the session-level ones rather than instead of them: they exist so E3 can sit in the
+    same table as E0-E2, not because they are the better estimate.
+
+    Args:
+        sessions: Output of :func:`aggregate_to_sessions`.
+
+    Returns:
+        Dict with ``nrmse_subject``, ``rmse_subject`` and ``r2_subject``.
+    """
+    by_subject = sessions.groupby("subject")[["y_true", "y_pred"]].mean()
+    y, p = by_subject.y_true.values, by_subject.y_pred.values
+    rmse = float(np.sqrt(np.mean((y - p) ** 2)))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    return {
+        "nrmse_subject": rmse / float(np.std(y)) if np.std(y) > 0 else np.nan,
+        "rmse_subject": rmse,
+        "r2_subject": 1 - float(np.sum((y - p) ** 2)) / ss_tot if ss_tot > 0 else np.nan,
+    }
 
 
 def aggregate_to_sessions(meta: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray) -> pd.DataFrame:

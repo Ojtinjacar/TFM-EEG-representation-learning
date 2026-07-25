@@ -27,8 +27,8 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from eval_expclr import (  # noqa: E402
-    aggregate_to_sessions, bootstrap_ci, extract_embeddings, fit_probe,
-    metrics_by_visit, paired_bootstrap_difference, session_metrics,
+    aggregate_to_sessions, bootstrap_ci, extract_embeddings, fit_knn_probe, fit_probe,
+    metrics_by_visit, paired_bootstrap_difference, session_metrics, subject_metrics,
 )
 from models import EnhancedAttentionLSTM  # noqa: E402
 from train_expclr import checkpoint_is_reusable  # noqa: E402
@@ -49,7 +49,8 @@ def load_data() -> tuple[np.ndarray, pd.DataFrame, np.ndarray]:
 
 
 def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int = 42,
-                  delta: float = 1.0, lr: float = 5e-3, sim_max: str = "train") -> Path:
+                  delta: float = 1.0, lr: float = 5e-3, sim_max: str = "train",
+                  tau: float = 1.0) -> Path:
     """Pre-trains one ExpCLR encoder excluding a subject, and returns its checkpoint path.
 
     The fold id carries the held-out subject, a tag, the epoch count and the seed, and the file
@@ -81,19 +82,21 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int
     """
     fold_id = f"loso_{tag}_e{epochs}_s{seed}_{sim_max}_{subject}"
     ckpt = Path("save/models") / (
-        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_1.0_delta_{delta}.pth")
+        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
     # Reuse is decided against the recorded configuration, never against the path alone: settings
     # absent from the file name would otherwise be inherited silently from an earlier run.
-    expected = {"delta": delta, "lr": lr, "loss_on": "embedding", "sim_max": sim_max,
-                "num_epochs": epochs, "seed": seed, "exclude_subjects": [subject]}
+    expected = {"delta": delta, "lr": lr, "temperature": tau, "loss_on": "projection",
+                "sim_max": sim_max, "dropout": 0.0, "num_epochs": epochs, "seed": seed,
+                "exclude_subjects": [subject]}
     if checkpoint_is_reusable(ckpt, expected):
         return ckpt
     cmd = [sys.executable, "src/train_expclr.py",
            "--data_path", str(DATA), "--expert_features", str(features),
            "--descriptor", "P_diverso", "--zone", "all", "--frequency", "all",
            "--fold_id", fold_id, "--num_epochs", str(epochs), "--seed", str(seed),
-           "--delta", str(delta), "--lr", str(lr), "--loss_on", "embedding",
-           "--sim_max", sim_max, "--exclude_subjects", subject]
+           "--delta", str(delta), "--lr", str(lr), "--temperature", str(tau),
+           "--loss_on", "projection", "--dropout", "0.0", "--sim_max", sim_max,
+           "--exclude_subjects", subject]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not ckpt.exists():
         raise RuntimeError(f"fallo el preentrenamiento de {subject}:\n{res.stdout[-2000:]}\n{res.stderr[-2000:]}")
@@ -117,8 +120,10 @@ def build_encoder(X: np.ndarray, device, checkpoint: Path | None, seed: int = 0)
     """
     if checkpoint is None:
         torch.manual_seed(seed)
+    # dropout=0 to match pre-training: in the paper dropout is a SimCLR augmentation, not a
+    # regulariser of ExpCLR, and it would make E(x) stochastic where the loss measures distances.
     model = EnhancedAttentionLSTM(input_size=X.shape[2], hidden_size=128, n_channels=X.shape[1],
-                                  sfreq=250, lstm_hidden_size=64).to(device)
+                                  sfreq=250, lstm_hidden_size=64, dropout=0.0).to(device)
     if checkpoint is not None:
         model.load_state_dict(torch.load(checkpoint, map_location=device))
     return model
@@ -183,7 +188,8 @@ class EmbeddingCache:
 
 def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: float = 1.0,
              lr: float = 5e-3, sim_max: str = "train",
-             exclude_subjects: list[str] | None = None) -> dict[str, pd.DataFrame]:
+             exclude_subjects: list[str] | None = None,
+             tau: float = 1.0) -> dict[str, pd.DataFrame]:
     """Runs leave-one-subject-out for every requested method, sharing folds and probe.
 
     Args:
@@ -238,7 +244,7 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
                     Xtr, Xte = F[train], F[test]
                 else:
                     emb = cache.get(pretrain_fold(subject, epochs, FEATURES, "expclr", seed,
-                                                  delta, lr, sim_max))
+                                                  delta, lr, sim_max, tau))
                     Xtr = np.hstack([emb[train], F[train]])
                     Xte = np.hstack([emb[test], F[test]])
                 scaler, probe = fit_probe(Xtr, y[train], groups[train])
@@ -246,10 +252,10 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
             else:                                   # métodos con encoder
                 if method == "ExpCLR":
                     ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr", seed, delta, lr,
-                                         sim_max)
+                                         sim_max, tau)
                 elif method == "B3":
                     ckpt = pretrain_fold(subject, epochs, shuffled_path, "shuffled", seed,
-                                         delta, lr, sim_max)
+                                         delta, lr, sim_max, tau)
                 elif method == "B2":
                     ckpt = None                     # encoder aleatorio
                 else:
@@ -257,6 +263,12 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
                 emb = cache.get(ckpt)
                 scaler, probe = fit_probe(emb[train], y[train], groups[train])
                 pred_test = probe.predict(scaler.transform(emb[test]))
+                # The paper reads the linear-minus-KNN gap as its cluster-separation diagnostic
+                # (Sec. 4.2), so every encoder method also gets a 1-NN probe.
+                knn_scaler, knn = fit_knn_probe(emb[train], y[train])
+                knn_pred = knn.predict(knn_scaler.transform(emb[test]))
+                preds.setdefault(f"{method}_KNN", []).append(
+                    aggregate_to_sessions(meta[test], y[test], knn_pred))
 
             preds[method].append(aggregate_to_sessions(meta[test], y[test], pred_test))
 
@@ -285,6 +297,10 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=5e-3,
                         help="Learning rate de Adam. El paper lo optimiza por dataset (Tab. 9), "
                              "asi que tomarlo tambien de tune_expclr.py.")
+    parser.add_argument("--tau", type=float, default=1.0,
+                        help="Temperatura del minado de negativos duros. El paper declara que su "
+                             "propio 1.0 no es optimo (App. B.4: 'other tau < 1.0 could improve "
+                             "the performance slightly'), asi que tomarlo de tune_expclr.py.")
     parser.add_argument("--sim_max", choices=["train", "batch"], default="train",
                         help="Donde se toma max_kl ||f_k - f_l||. El paper permite ambas "
                              "(Sec. 3.4) y cambia la escala de s_ij, luego interactua con Delta. "
@@ -303,8 +319,9 @@ def main() -> None:
         cfg = json.loads(args.config.read_text())
         args.delta, args.lr = cfg["delta"], cfg["lr"]
         args.sim_max = cfg.get("sim_max", args.sim_max)
+        args.tau = cfg.get("tau", args.tau)
         args.exclude_subjects = cfg["validation_subjects"]
-        print(f"config de {args.config}: delta={args.delta} lr={args.lr} "
+        print(f"config de {args.config}: delta={args.delta} lr={args.lr} tau={args.tau} "
               f"sim_max={args.sim_max} | {len(args.exclude_subjects)} sujetos excluidos")
 
     device = torch.device("mps" if torch.backends.mps.is_available()
@@ -313,19 +330,37 @@ def main() -> None:
     print(f"device: {device} | epocas: {args.epochs} | metodos: {args.methods}")
 
     results = run_loso(args.methods, args.epochs, device, args.seed, args.delta, args.lr,
-                       args.sim_max, args.exclude_subjects)
+                       args.sim_max, args.exclude_subjects, args.tau)
 
     rows = []
     for method, sessions in results.items():
         sessions.to_csv(OUT / f"predicciones_{method}.csv", index=False)
         m = session_metrics(sessions)
         low, high = bootstrap_ci(sessions, "mae")
-        rows.append({"metodo": method, **m, "mae_ci_low": low, "mae_ci_high": high})
+        # Session-level metrics are the headline; the subject-level ones reproduce
+        # master_table.py so E3 can be compared with E0-E2 despite averaging visits.
+        rows.append({"metodo": method, **m, "mae_ci_low": low, "mae_ci_high": high,
+                     **subject_metrics(sessions)})
     summary = pd.DataFrame(rows).sort_values("mae")
     summary.to_csv(OUT / "resumen_metodos.csv", index=False)
 
-    print("\n=== resultados a nivel sesion (out-of-fold) ===")
-    print(summary.round(3).to_string(index=False))
+    session_cols = ["metodo", "n_sessions", "mae", "mae_ci_low", "mae_ci_high", "r2", "rho"]
+    print("\n=== nivel sesion, out-of-fold (cifra principal) ===")
+    print(summary[session_cols].round(3).to_string(index=False))
+    print("\n=== nivel sujeto, formula de master_table.py (comparable con E0-E2) ===")
+    print(summary[["metodo", "nrmse_subject", "rmse_subject", "r2_subject"]]
+          .round(3).to_string(index=False))
+    print("  (promedia las visitas de cada nino, por eso no es la cifra principal)")
+
+    # The paper reads this gap as its cluster-separation diagnostic (Sec. 4.2): a linear probe that
+    # beats 1-NN by a wide margin means the geometry is linearly exploitable but not clustered.
+    gaps = [(m, summary.loc[summary.metodo == m, "mae"].iloc[0],
+             summary.loc[summary.metodo == f"{m}_KNN", "mae"].iloc[0])
+            for m in results if f"{m}_KNN" in results.keys()]
+    if gaps:
+        print("\n=== diferencia lineal vs KNN(k=1), MAE en meses ===")
+        for method, linear, knn in sorted(gaps, key=lambda g: g[1]):
+            print(f"  {method:10s} lineal {linear:5.2f} | KNN {knn:5.2f} | diferencia {knn-linear:+5.2f}")
 
     if "ExpCLR" in results and "B1" in results:
         # Contraste primario, pre-registrado: el test de falsabilidad del proyecto.

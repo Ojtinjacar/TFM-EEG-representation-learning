@@ -180,11 +180,13 @@ def effective_dimensionality(z):
 def equidistant_reference(n, device):
     """Builds the distance matrix of a perfectly equidistant cloud, as ``mu_i`` normalises it.
 
-    Not a matrix of ones. ``mu_i`` averages over all N entries of row i including ``dist_ii = 0``,
-    so if every off-diagonal distance equals some c, the row mean is ``c*(N-1)/N``; forcing that to
-    the 1 the normalisation imposes gives ``c = N/(N-1)``. A matrix of ones has row mean
-    ``(N-1)/N`` and is therefore produced by no embedding at all, which understated the reference
-    floor by about 6 % at N=64 -- precisely in the regime where the warning has to fire.
+    Not a matrix of ones. Let every off-diagonal raw distance equal some c. Since ``mu_i`` averages
+    over all N entries of row i including ``dist_ii = 0``, we get ``mu_i = c(N-1)/N`` and therefore
+    ``D_ij = c / mu_i = N/(N-1)``, independent of c. A matrix of ones instead has row mean
+    ``(N-1)/N``, which no normalised distance matrix can have, so it understated the reference
+    floor -- by how much depends on the descriptor, but the entries differ by ``1/(N-1)``, i.e.
+    1.6 % at N=64, and the effect on the floor is larger. This matters precisely in the regime
+    where the warning has to fire.
 
     Args:
         n: Batch size.
@@ -357,6 +359,7 @@ def main(args):
         n_channels=X.shape[1],
         sfreq=args.sampling_frequency,
         lstm_hidden_size=args.embedding_size // 2,
+        dropout=args.dropout,
     ).to(device)
 
     # Adam with exponential decay, as specified in the paper (Sec. 4.2), not the repo's AdamW.
@@ -445,6 +448,8 @@ def main(args):
                 "loss_on": args.loss_on,
                 "sim_max": args.sim_max,
                 "lr": args.lr,
+                "dropout": args.dropout,
+                "embedding_size": args.embedding_size,
                 "batch_size": args.batch_size,
                 "num_epochs": args.num_epochs,
                 "seed": args.seed,
@@ -508,13 +513,21 @@ if __name__ == "__main__":
     parser.add_argument("--sim_max", choices=["train", "batch"], default="train",
                         help="Whether max_kl ||f_k - f_l|| is taken over the training split or "
                              "per batch. 'train' avoids leaking the held-out fold.")
-    parser.add_argument("--loss_on", choices=["projection", "embedding"], default="embedding",
-                        help="Where the loss is applied. Defaults to 'embedding' because ExpCLR "
-                             "has no projection head: the paper optimises E(x), the very same "
-                             "representation it evaluates (Secs. 3.6 and 4.2). Applying it to the "
-                             "projection would shape a geometry behind a non-invertible ReLU MLP "
-                             "that the probe never sees. 'projection' is kept for the SimCLR-style "
-                             "ablation only.")
+    parser.add_argument("--loss_on", choices=["projection", "embedding"], default="projection",
+                        help="Donde se aplica la perdida. Por defecto 'projection', que aqui es la "
+                             "salida del encoder completo: el paper describe E como la red base mas "
+                             "una red totalmente conectada de dos capas encima (Sec. 4.2), asi que "
+                             "esas capas forman parte de E y no son una cabeza descartable como en "
+                             "SimCLR. La evaluacion debe usar la misma representacion, ver "
+                             "extract_embeddings. 'embedding' da el encoder dos capas mas corto y "
+                             "se conserva como ablacion.")
+    parser.add_argument("--dropout", type=float, default=0.0,
+                        help="Dropout del encoder. Cero por defecto: en el paper el dropout es una "
+                             "augmentation del baseline SimCLR (Sec. 4.3 y App. B.4), nunca un "
+                             "regularizador de ExpCLR, cuya tesis es que no usa transformaciones. "
+                             "Ademas haria E(x_i) estocastico justo donde la perdida mide "
+                             "distancias, metiendo ruido de mascara en D_ij. El 0.25 heredado "
+                             "queda disponible para la ablacion.")
     parser.add_argument("--diagnose_every", type=int, default=5,
                         help="Epoch interval for the geometry diagnostics (effective "
                              "dimensionality and equidistant-geometry reference).")
