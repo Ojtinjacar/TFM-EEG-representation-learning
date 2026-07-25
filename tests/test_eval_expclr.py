@@ -1,0 +1,198 @@
+"""Tests for the E3 evaluation path.
+
+The ones that matter are the controls: that the probe is genuinely frozen and deterministic, that
+shuffling labels across subjects drives R2 to zero, and that aggregation lands on sessions rather
+than subjects. Those are the three ways this pipeline could silently produce numbers that look
+good and mean nothing.
+
+Run with:
+    conda run -n dasci-cimcyc python -m pytest tests/test_eval_expclr.py
+"""
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from eval_expclr import (  # noqa: E402
+    aggregate_to_sessions,
+    bootstrap_ci,
+    extract_embeddings,
+    fit_probe,
+    metrics_by_visit,
+    paired_bootstrap_difference,
+    session_metrics,
+)
+from models import EnhancedAttentionLSTM  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _seed():
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+
+@pytest.fixture
+def windows():
+    """Synthetic window metadata: 10 subjects, up to 4 visits, 2 blocks, 5 windows each."""
+    rows = []
+    for s in range(10):
+        for age in (6, 9, 16, 36)[: 2 + s % 3]:
+            for block in (1, 2):
+                for _ in range(5):
+                    rows.append({"subject": f"S{s:02d}", "age": age, "block": block})
+    return pd.DataFrame(rows)
+
+
+# --- Extracción de embeddings ------------------------------------------------------------
+
+def test_extraction_is_deterministic_and_leaves_encoder_frozen():
+    """Two extractions on the same weights must match bit for bit, and stats must not move."""
+    model = EnhancedAttentionLSTM(input_size=250, hidden_size=32, n_channels=4, sfreq=250,
+                                  lstm_hidden_size=16)
+    X = np.random.randn(24, 4, 250).astype(np.float32)
+    device = torch.device("cpu")
+
+    before = [b.clone() for b in model.buffers()]
+    first = extract_embeddings(model, X, device, batch_size=8)
+    second = extract_embeddings(model, X, device, batch_size=8)
+    after = list(model.buffers())
+
+    assert np.array_equal(first, second), "el probe no es determinista"
+    for b0, b1 in zip(before, after):
+        assert torch.equal(b0, b1), "los buffers de BatchNorm se han actualizado: no esta congelado"
+
+
+def test_extraction_is_invariant_to_batch_size():
+    model = EnhancedAttentionLSTM(input_size=250, hidden_size=32, n_channels=4, sfreq=250,
+                                  lstm_hidden_size=16)
+    X = np.random.randn(20, 4, 250).astype(np.float32)
+    a = extract_embeddings(model, X, torch.device("cpu"), batch_size=4)
+    b = extract_embeddings(model, X, torch.device("cpu"), batch_size=20)
+    assert np.allclose(a, b, atol=1e-5)
+
+
+# --- Probe -------------------------------------------------------------------------------
+
+def test_probe_recovers_a_linear_signal():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(200, 8))
+    groups = np.repeat(np.arange(20), 10)
+    y = 3 * X[:, 0] - 2 * X[:, 1] + rng.normal(0, 0.1, 200)
+    scaler, model = fit_probe(X, y, groups)
+    pred = model.predict(scaler.transform(X))
+    assert np.corrcoef(pred, y)[0, 1] > 0.95
+
+
+def test_probe_is_deterministic():
+    rng = np.random.default_rng(1)
+    X, groups = rng.normal(size=(120, 5)), np.repeat(np.arange(12), 10)
+    y = X[:, 0] + rng.normal(0, 0.2, 120)
+    a = fit_probe(X, y, groups)[1].predict(StandardScalerFit(X))
+    b = fit_probe(X, y, groups)[1].predict(StandardScalerFit(X))
+    assert np.array_equal(a, b)
+
+
+def StandardScalerFit(X):  # noqa: N802 - helper local al test
+    from sklearn.preprocessing import StandardScaler
+    return StandardScaler().fit_transform(X)
+
+
+def test_probe_survives_a_single_training_group():
+    rng = np.random.default_rng(2)
+    X = rng.normal(size=(30, 4))
+    scaler, model = fit_probe(X, rng.normal(size=30), np.zeros(30))
+    assert model.predict(scaler.transform(X)).shape == (30,)
+
+
+# --- Agregación --------------------------------------------------------------------------
+
+def test_aggregation_lands_on_sessions_not_subjects(windows):
+    y_true = windows.age.values.astype(float)
+    y_pred = y_true + np.random.normal(0, 1, len(windows))
+    sessions = aggregate_to_sessions(windows, y_true, y_pred)
+    expected = windows.groupby(["subject", "age", "block"]).ngroups
+    assert len(sessions) == expected
+    assert sessions.groupby(["subject", "age", "block"]).size().max() == 1
+
+
+def test_aggregation_preserves_the_true_age_of_each_visit(windows):
+    """Averaging by subject would invent targets between visits; by session it must not."""
+    y_true = windows.age.values.astype(float)
+    sessions = aggregate_to_sessions(windows, y_true, y_true.copy())
+    assert set(sessions.y_true.unique()) <= {6.0, 9.0, 16.0, 36.0}
+
+
+def test_aggregation_uses_the_median_and_resists_outliers(windows):
+    y_true = windows.age.values.astype(float)
+    y_pred = y_true.copy()
+    y_pred[0] = 1e6  # una ventana artefactada
+    sessions = aggregate_to_sessions(windows, y_true, y_pred)
+    assert sessions.y_pred.max() < 100, "la mediana deberia absorber el valor extremo"
+
+
+# --- Métricas ----------------------------------------------------------------------------
+
+def test_metrics_are_perfect_on_perfect_predictions(windows):
+    y = windows.age.values.astype(float)
+    m = session_metrics(aggregate_to_sessions(windows, y, y))
+    assert m["mae"] == pytest.approx(0.0)
+    assert m["r2"] == pytest.approx(1.0)
+
+
+def test_r2_is_zero_when_predicting_the_mean(windows):
+    y = windows.age.values.astype(float)
+    m = session_metrics(aggregate_to_sessions(windows, y, np.full_like(y, y.mean())))
+    assert abs(m["r2"]) < 0.05
+
+
+def test_shuffling_labels_across_subjects_destroys_r2(windows):
+    """The identity-confounding control: with labels shuffled between subjects, R2 must collapse."""
+    rng = np.random.default_rng(3)
+    y = windows.age.values.astype(float)
+    subj = windows.subject.values
+    mapping = dict(zip(np.unique(subj), rng.permutation(np.unique(y).repeat(4)[:len(np.unique(subj))])))
+    y_shuffled = np.array([mapping[s] for s in subj], dtype=float)
+    m = session_metrics(aggregate_to_sessions(windows, y_shuffled, y))
+    assert m["r2"] < 0.3, "predecir la edad real cuando las etiquetas estan barajadas no deberia funcionar"
+
+
+def test_metrics_by_visit_covers_every_visit(windows):
+    y = windows.age.values.astype(float)
+    tab = metrics_by_visit(aggregate_to_sessions(windows, y, y + 1))
+    assert set(tab.age) == set(windows.age.unique())
+    assert (tab.mae > 0).all()
+
+
+# --- Bootstrap ---------------------------------------------------------------------------
+
+def test_bootstrap_interval_brackets_the_observed_value(windows):
+    rng = np.random.default_rng(4)
+    y = windows.age.values.astype(float)
+    sessions = aggregate_to_sessions(windows, y, y + rng.normal(0, 2, len(y)))
+    obs = session_metrics(sessions)["mae"]
+    low, high = bootstrap_ci(sessions, n_boot=200)
+    assert low <= obs <= high
+
+
+def test_paired_bootstrap_detects_a_clear_difference(windows):
+    rng = np.random.default_rng(5)
+    y = windows.age.values.astype(float)
+    good = aggregate_to_sessions(windows, y, y + rng.normal(0, 0.5, len(y)))
+    bad = aggregate_to_sessions(windows, y, y + rng.normal(0, 6, len(y)))
+    res = paired_bootstrap_difference(good, bad, n_boot=300)
+    assert res["diff"] < 0, "el metodo bueno debe tener menor MAE"
+    assert res["ci_high"] < 0, "el intervalo debe excluir el cero"
+
+
+def test_paired_bootstrap_finds_no_difference_between_identical_methods(windows):
+    rng = np.random.default_rng(6)
+    y = windows.age.values.astype(float)
+    same = aggregate_to_sessions(windows, y, y + rng.normal(0, 1, len(y)))
+    res = paired_bootstrap_difference(same, same.copy(), n_boot=200)
+    assert res["diff"] == pytest.approx(0.0)
+    assert res["ci_low"] <= 0 <= res["ci_high"]

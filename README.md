@@ -218,6 +218,56 @@ Saved as: `save/models/Triplet_<target>_<zone>_<frequency>_<fold_id>_emb128_m0.4
 
 ---
 
+### ExpCLR (expert-feature guided contrastive learning)
+
+Implements Nonnenmacher et al., *Utilizing Expert Features for Contrastive Learning of
+Time-Series Representations*, ICML 2022. Unlike SimCLR there are no augmentations and no pair of
+views: the loss pulls the embedding geometry towards the geometry of a continuous expert
+descriptor, over the full NxN matrix of each batch.
+
+First build the descriptor, aligned to the window order of `processed_windows.npy`:
+
+```bash
+python ../src/build_expert_features.py \
+    --features_path ../../data/eda_outputs/features_por_edad/features_106_por_ventana.parquet \
+    --meta_path     data/processed/all_all/processed_metadata.csv \
+    --output_dir    data/processed/expert_features \
+    --descriptor    P_full
+```
+
+Reading the parquet needs `pyarrow`, which is absent from the `dasci-cimcyc` environment; run
+this step with `conda run -n base`. The resulting `.npy` is plain NumPy and the training step
+below runs in `dasci-cimcyc` as usual. The window order is identical across every
+`data/processed/*` directory, so the descriptor is built once and reused for any zone x band.
+
+```bash
+python src/train_expclr.py \
+    --data_path       data/processed/all_all \
+    --expert_features data/processed/expert_features/expert_features_P_full.npy \
+    --descriptor      P_full \
+    --zone            all \
+    --frequency       all \
+    --batch_size      64 \
+    --lr              0.005 \
+    --temperature     1.0 \
+    --delta           1.0 \
+    --num_epochs      100 \
+    --exclude_subjects B010 B011 B014 \
+    --fold_id         fold0
+```
+
+Defaults follow the paper: `tau = 1`, `Delta = 1`, batch 64, Adam with exponential decay
+`gamma = 0.99`, learning rate 5e-3. Ablation flags: `--no_hard_negative_mining` (the plain
+quadratic loss of Eq. 3), `--linear_similarity` (Eq. 2 instead of Eq. 5), `--sim_max batch`,
+`--descriptor P_madurativo|P_aper` and `--min_apsd_r2`.
+
+Saved as:
+`save/models/ExpCLR_<zone>_<frequency>_<fold_id>_<descriptor>_batch_<bs>_lr_<lr>_tau_<tau>_delta_<delta>.pth`,
+with a `_config.json` sidecar recording the descriptor dimension and the train-fitted
+`max_kl ||f_k - f_l||`.
+
+---
+
 ## Step 4 — Downstream evaluation
 
 Evaluate a pre-trained backbone (or a baseline) on a regression task using a subject-based train/test split.

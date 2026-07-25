@@ -11,8 +11,18 @@ from sklearn.metrics import r2_score
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
-LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP"]
+LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
 FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP"]
+
+# ExpCLR (E3) hyperparameters. They are kept here as constants because run_pretraining must
+# rebuild the checkpoint filename that src/train_expclr.py writes, character for character.
+# Values follow Nonnenmacher et al. (ICML 2022): tau = 1, Delta = 1, batch = 64, lr = 5e-3.
+EXPCLR_DESCRIPTOR = "P_full"
+EXPCLR_BATCH_SIZE = 64
+EXPCLR_LR = 0.005
+EXPCLR_TAU = 1.0
+EXPCLR_DELTA = 1.0
+EXPCLR_FEATURES = "data/processed/expert_features/expert_features_P_full.npy"
 
 # SimCLR variants. Each is a first-class "method": it gets its own pre-training
 # (SimCLR encoder with the given train_simclr.py flags) and its own result rows
@@ -146,6 +156,12 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             f"{method}_{zone}_{frequency}_{fold_id}"
             f"_hidden128_beta{vae_beta}_prior{vae_prior}_fb{vae_free_bits}_e100.pth"
         )
+    elif method == "ExpCLR":
+        # Must mirror the checkpoint name built in src/train_expclr.py exactly.
+        model_filename = (
+            f"ExpCLR_{zone}_{frequency}_{fold_id}_{EXPCLR_DESCRIPTOR}"
+            f"_batch_{EXPCLR_BATCH_SIZE}_lr_{EXPCLR_LR}_tau_{EXPCLR_TAU}_delta_{EXPCLR_DELTA}.pth"
+        )
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
@@ -196,6 +212,22 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--zone", zone,
             "--frequency", frequency,
             "--fold_id", fold_id,
+            "--exclude_subjects"
+        ] + [str(s) for s in test_subjects]
+    elif method == "ExpCLR":
+        expclr_data_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
+        command = [
+            "python", "src/train_expclr.py",
+            "--zone", zone,
+            "--frequency", frequency,
+            "--fold_id", fold_id,
+            "--data_path", expclr_data_dir,
+            "--expert_features", EXPCLR_FEATURES,
+            "--descriptor", EXPCLR_DESCRIPTOR,
+            "--batch_size", str(EXPCLR_BATCH_SIZE),
+            "--lr", str(EXPCLR_LR),
+            "--temperature", str(EXPCLR_TAU),
+            "--delta", str(EXPCLR_DELTA),
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
     elif method in VAE_FAMILY:
@@ -429,6 +461,18 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["CVAE-SP"] = None
 
+    # 1.4d Pre-train ExpCLR (E3): contrastive learning guided by the continuous expert
+    # descriptor instead of augmented views (Nonnenmacher et al., ICML 2022).
+    if _use("ExpCLR"):
+        print(f"\n  Pre-training ExpCLR (descriptor={EXPCLR_DESCRIPTOR}, "
+              f"tau={EXPCLR_TAU}, delta={EXPCLR_DELTA})...", flush=True)
+        pretrained_models["ExpCLR"] = run_pretraining(
+            method="ExpCLR", target=None, zone=args.zone, frequency=args.frequency,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+        )
+    else:
+        pretrained_models["ExpCLR"] = None
+
     # 1.5 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
         if not _use("TripletLoss"):
@@ -497,6 +541,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     # Same CVAE architecture, standard prior; evaluate as --method CVAE.
                     model_path = pretrained_models["CVAE-SP"]
                     downstream_method = "CVAE"
+                elif method == "ExpCLR":
+                    model_path = pretrained_models["ExpCLR"]
                 elif method == "TripletLoss":
                     model_path = pretrained_models[f"TripletLoss_{target}"]
                 else:  # PCA o supervised

@@ -378,7 +378,7 @@ def main(args):
         test_subjects=args.test_subjects
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "ExpCLR"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
@@ -396,6 +396,8 @@ def main(args):
 
         model_map = {
             "SimCLR": EnhancedAttentionLSTM,
+            # ExpCLR pre-trains the very same encoder; only the objective differs.
+            "ExpCLR": EnhancedAttentionLSTM,
             "AE": AttentionLSTMAutoencoder,
             "MAE": MaskedAttentionLSTMAutoencoder,
             "TripletLoss": EnhancedAttentionLSTM,
@@ -646,7 +648,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "CVAE"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "CVAE", "ExpCLR"],
         required=True,
         help="Method to use."
     )

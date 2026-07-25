@@ -72,6 +72,125 @@ class NTXentLoss(torch.nn.Module):
 
 
 # =============================================================================
+#  ExpCLR: contrastive learning with continuous expert features
+# =============================================================================
+class ExpCLRLoss(torch.nn.Module):
+    """ExpCLR objective of Nonnenmacher et al. (ICML 2022), arXiv:2202.10337.
+
+    Unlike NT-Xent there are no positive/negative pairs and no augmented views: the loss operates
+    on the full NxN pairwise matrix of a single batch, pulling representation distances towards a
+    target set by how similar the expert descriptors are. It implements, in order:
+
+    - Eq. 5 (similarity):   ``s_ij = (1 - ||f_i - f_j|| / max_kl ||f_k - f_l||) ** 2``
+    - Kim et al. (2021) normalisation: ``D_ij = ||E_i - E_j|| / mu_i``,
+      with ``mu_i = (1/N) sum_j ||E_i - E_j||``
+    - Eq. 3 (pair term):    ``L_ij = ((1 - s_ij) * Delta - D_ij) ** 2``
+    - Eq. 4 (full loss):    ``L = tau * log[ (1/N^2) * sum_ij exp(L_ij / tau) ]``
+
+    The log-sum-exp is the implicit hard-negative mining: the gradient of the loss w.r.t. each
+    ``L_ij`` is proportional to ``exp(L_ij / tau)``, so the worst-fitted pairs dominate (App. F of
+    the paper). Proposition 3 bounds the two regimes: ``tau -> 0`` minimises ``max_ij L_ij`` and
+    ``tau -> inf`` reduces to the plain quadratic loss of Eq. 3.
+    """
+
+    def __init__(self, device, delta=1.0, temperature=1.0, feat_max_dist=None,
+                 squared_similarity=True):
+        """Initialises the ExpCLR objective.
+
+        Args:
+            device: Torch device the loss runs on.
+            delta: Margin hyperparameter ``Delta`` of Eq. 3/4. The paper uses 1.0 for all datasets.
+            temperature: Hard-negative mining strength ``tau`` of Eq. 4. The paper uses 1.0.
+                Pass None to disable mining and fall back to the quadratic loss of Eq. 3 (the
+                NHNM ablation of Fig. 2).
+            feat_max_dist: Precomputed ``max_kl ||f_k - f_l||`` over the training split. When None,
+                the maximum is taken per batch, which the paper also allows (Sec. 3.4) but which
+                leaks test-fold information if the batch is not train-only.
+            squared_similarity: If True use Eq. 5 (the variant the paper actually uses); if False
+                use the plain Eq. 2.
+
+        Raises:
+            ValueError: If ``feat_max_dist`` or ``temperature`` are non-positive.
+        """
+        super(ExpCLRLoss, self).__init__()
+        if feat_max_dist is not None and feat_max_dist <= 0:
+            raise ValueError(f"feat_max_dist must be positive, got {feat_max_dist}")
+        if temperature is not None and temperature <= 0:
+            raise ValueError(f"temperature must be positive or None, got {temperature}")
+        self.device = device
+        self.delta = float(delta)
+        self.temperature = None if temperature is None else float(temperature)
+        self.feat_max_dist = None if feat_max_dist is None else float(feat_max_dist)
+        self.squared_similarity = bool(squared_similarity)
+        self.eps = 1e-8
+
+    def expert_similarity(self, f):
+        """Computes the continuous similarity matrix from expert features (Eq. 2 / Eq. 5).
+
+        Args:
+            f: Expert features, shape (B, d).
+
+        Returns:
+            Similarity matrix of shape (B, B) with values in [0, 1] and ones on the diagonal.
+        """
+        feat_dist = torch.cdist(f, f, p=2)
+        if self.feat_max_dist is not None:
+            max_dist = self.feat_max_dist
+        else:
+            max_dist = feat_dist.max().clamp_min(self.eps)
+        # Clamped at zero: with a train-fitted max_dist a batch pair may exceed it, and squaring a
+        # negative value would silently turn "very dissimilar" back into "similar".
+        sim = (1.0 - feat_dist / max_dist).clamp_min(0.0)
+        return sim.pow(2) if self.squared_similarity else sim
+
+    def normalized_distance(self, z):
+        """Computes the mean-normalised embedding distances ``D_ij`` (Kim et al., 2021).
+
+        Args:
+            z: Embeddings, shape (B, e).
+
+        Returns:
+            Distance matrix of shape (B, B).
+        """
+        dist = torch.cdist(z, z, p=2)
+        mu = dist.mean(dim=1, keepdim=True).clamp_min(self.eps)
+        return dist / mu
+
+    def forward(self, z, f):
+        """Evaluates the ExpCLR loss on a batch.
+
+        Args:
+            z: Embeddings produced by the encoder, shape (B, e).
+            f: Expert features aligned with ``z``, shape (B, d). Treated as constant.
+
+        Returns:
+            Scalar loss tensor.
+
+        Raises:
+            ValueError: If ``z`` and ``f`` disagree on the batch dimension, or the batch has
+                fewer than two samples (the pairwise loss is undefined).
+        """
+        if z.shape[0] != f.shape[0]:
+            raise ValueError(f"Batch mismatch between embeddings {z.shape} and features {f.shape}")
+        if z.shape[0] < 2:
+            raise ValueError("ExpCLR needs at least two samples per batch")
+
+        sim = self.expert_similarity(f.detach())
+        dist = self.normalized_distance(z)
+        pair_loss = ((1.0 - sim) * self.delta - dist).pow(2)
+
+        if self.temperature is None:
+            # Eq. 3: no hard-negative mining (the NHNM ablation).
+            return pair_loss.mean()
+
+        # Eq. 4 via log-sum-exp for numerical stability:
+        #   tau * log[ (1/N^2) sum exp(L_ij/tau) ] = tau * (logsumexp(L/tau) - log(N^2))
+        n_pairs = pair_loss.numel()
+        scaled = pair_loss.reshape(-1) / self.temperature
+        return self.temperature * (torch.logsumexp(scaled, dim=0) - np.log(n_pairs))
+
+
+# =============================================================================
 #  VAE latent priors (Strategy pattern) and ELBO objective
 # =============================================================================
 def _apply_free_bits(kl_per_dim, free_bits):

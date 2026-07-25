@@ -8,6 +8,7 @@ __pycache__/
 
 # Pipeline outputs (models, figures, downstream results)
 save/
+results_*/
 
 # Private / large data: CIMCYC dataset (raw + processed EEG, ~2.6 GB)
 data/
@@ -20,6 +21,10 @@ data/
 # Python tooling caches and build artifacts
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.egg-info/
 build/
 dist/
