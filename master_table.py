@@ -10,6 +10,7 @@ DIRS = [
     "results_ablation",
     "results_vae",
     "results_expclr",
+    "results_expclr_diverso",
 ]
 frames = []
 for d in DIRS:
@@ -32,7 +33,7 @@ CATS = [
     ("Baseline / SSL puro", ["PCA", "AE", "MAE", "SimCLR", "VAE"]),
     ("Generativo condicionado (informado por edad)", ["CVAE-SP", "CVAE"]),
     ("Informado por etiqueta", ["TripletLoss", "supervised"]),
-    ("Guiado por descriptor experto continuo (ExpCLR)", ["ExpCLR"]),
+    ("Guiado por descriptor experto continuo (ExpCLR)", ["ExpCLR", "ExpCLR-diverso", "ExpCLR-madurativo"]),
     ("Neighbor - same session", ["SimCLR-nbr-cosine", "SimCLR-nbr-wasser", "SimCLR-nbr-riemann"]),
     ("Neighbor - cross-subject same-age", ["SimCLR-xsubj-cosine", "SimCLR-xsubj-wasser", "SimCLR-xsubj-riemann"]),
     ("Neighbor - same-subject diff-age", ["SimCLR-diffage-cosine", "SimCLR-diffage-wasser", "SimCLR-diffage-riemann"]),

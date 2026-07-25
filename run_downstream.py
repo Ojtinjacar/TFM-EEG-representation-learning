@@ -24,6 +24,19 @@ EXPCLR_TAU = 1.0
 EXPCLR_DELTA = 1.0
 EXPCLR_FEATURES = "data/processed/expert_features/expert_features_P_full.npy"
 
+# ExpCLR variants, following the same registry pattern as SIMCLR_VARIANTS below: each is a
+# first-class "method" with its own pre-training and its own result rows. What varies is the
+# expert descriptor, so no extra tag is needed: src/train_expclr.py already embeds the
+# descriptor label in the checkpoint name, which keeps the variants from overwriting each other.
+# "ExpCLR" (P_full, the 106 curated features) is the reference; the others are descriptor ablations.
+EXPCLR_VARIANTS = {
+    "ExpCLR":              {"descriptor": EXPCLR_DESCRIPTOR, "features": EXPCLR_FEATURES},
+    "ExpCLR-diverso":      {"descriptor": "P_diverso",
+                            "features": "data/processed/expert_features/expert_features_P_diverso.npy"},
+    "ExpCLR-madurativo":   {"descriptor": "P_madurativo",
+                            "features": "data/processed/expert_features/expert_features_P_madurativo.npy"},
+}
+
 # SimCLR variants. Each is a first-class "method": it gets its own pre-training
 # (SimCLR encoder with the given train_simclr.py flags) and its own result rows
 # (labelled with the variant name). "tag" disambiguates the saved .pth so variants
@@ -156,10 +169,11 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             f"{method}_{zone}_{frequency}_{fold_id}"
             f"_hidden128_beta{vae_beta}_prior{vae_prior}_fb{vae_free_bits}_e100.pth"
         )
-    elif method == "ExpCLR":
-        # Must mirror the checkpoint name built in src/train_expclr.py exactly.
+    elif method in EXPCLR_VARIANTS:
+        # Must mirror the checkpoint name built in src/train_expclr.py exactly. The descriptor
+        # label is what distinguishes one variant's checkpoint from another's.
         model_filename = (
-            f"ExpCLR_{zone}_{frequency}_{fold_id}_{EXPCLR_DESCRIPTOR}"
+            f"ExpCLR_{zone}_{frequency}_{fold_id}_{EXPCLR_VARIANTS[method]['descriptor']}"
             f"_batch_{EXPCLR_BATCH_SIZE}_lr_{EXPCLR_LR}_tau_{EXPCLR_TAU}_delta_{EXPCLR_DELTA}.pth"
         )
     else:
@@ -214,16 +228,17 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--fold_id", fold_id,
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
-    elif method == "ExpCLR":
+    elif method in EXPCLR_VARIANTS:
         expclr_data_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
+        variant = EXPCLR_VARIANTS[method]
         command = [
             "python", "src/train_expclr.py",
             "--zone", zone,
             "--frequency", frequency,
             "--fold_id", fold_id,
             "--data_path", expclr_data_dir,
-            "--expert_features", EXPCLR_FEATURES,
-            "--descriptor", EXPCLR_DESCRIPTOR,
+            "--expert_features", variant["features"],
+            "--descriptor", variant["descriptor"],
             "--batch_size", str(EXPCLR_BATCH_SIZE),
             "--lr", str(EXPCLR_LR),
             "--temperature", str(EXPCLR_TAU),
@@ -365,10 +380,18 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     # Each variant is treated as its own method downstream; "SimCLR" in the base lists
     # is replaced by the selected variant names.
     simclr_variants = list(getattr(args, "simclr_variants", None) or ["SimCLR"]) if _use("SimCLR") else []
+    # ExpCLR expands the same way: "ExpCLR" in the base lists is replaced by the selected
+    # descriptor variants, each of which becomes its own result label.
+    expclr_variants = list(getattr(args, "expclr_variants", None) or ["ExpCLR"]) if _use("ExpCLR") else []
     def _expand(mlist):
         out = []
         for m in mlist:
-            out.extend(simclr_variants) if m == "SimCLR" else out.append(m)
+            if m == "SimCLR":
+                out.extend(simclr_variants)
+            elif m == "ExpCLR":
+                out.extend(expclr_variants)
+            else:
+                out.append(m)
         return out
     lp_methods = _expand([m for m in LINEAR_PROBE_METHODS if _use(m)])
     ft_methods = _expand([m for m in FINE_TUNING_METHODS if _use(m)])
@@ -463,15 +486,16 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
     # 1.4d Pre-train ExpCLR (E3): contrastive learning guided by the continuous expert
     # descriptor instead of augmented views (Nonnenmacher et al., ICML 2022).
-    if _use("ExpCLR"):
-        print(f"\n  Pre-training ExpCLR (descriptor={EXPCLR_DESCRIPTOR}, "
+    # One pre-training per requested descriptor variant, each with its own checkpoint.
+    for variant in expclr_variants:
+        print(f"\n  Pre-training {variant} (descriptor={EXPCLR_VARIANTS[variant]['descriptor']}, "
               f"tau={EXPCLR_TAU}, delta={EXPCLR_DELTA})...", flush=True)
-        pretrained_models["ExpCLR"] = run_pretraining(
-            method="ExpCLR", target=None, zone=args.zone, frequency=args.frequency,
+        pretrained_models[variant] = run_pretraining(
+            method=variant, target=None, zone=args.zone, frequency=args.frequency,
             test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
         )
-    else:
-        pretrained_models["ExpCLR"] = None
+    for variant in EXPCLR_VARIANTS:
+        pretrained_models.setdefault(variant, None)
 
     # 1.5 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
@@ -541,8 +565,11 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     # Same CVAE architecture, standard prior; evaluate as --method CVAE.
                     model_path = pretrained_models["CVAE-SP"]
                     downstream_method = "CVAE"
-                elif method == "ExpCLR":
-                    model_path = pretrained_models["ExpCLR"]
+                elif method in EXPCLR_VARIANTS:
+                    # Descriptor variants keep their own result label but share the encoder
+                    # architecture, so downstream.py always sees --method ExpCLR.
+                    model_path = pretrained_models.get(method)
+                    downstream_method = "ExpCLR"
                 elif method == "TripletLoss":
                     model_path = pretrained_models[f"TripletLoss_{target}"]
                 else:  # PCA o supervised
@@ -937,6 +964,15 @@ if __name__ == "__main__":
         choices=list(SIMCLR_VARIANTS.keys()),
         help="Which SimCLR variants to run as first-class methods (default: just the "
              "standard 'SimCLR' control). E.g. --simclr_variants SimCLR SimCLR-nbr-cosine."
+    )
+    parser.add_argument(
+        "--expclr_variants",
+        nargs="+",
+        type=str,
+        default=["ExpCLR"],
+        choices=list(EXPCLR_VARIANTS.keys()),
+        help="Which ExpCLR descriptor variants to run as first-class methods (default: just "
+             "'ExpCLR', the P_full reference). E.g. --expclr_variants ExpCLR-diverso."
     )
     parser.add_argument(
         "--neighbor_index_dir",
