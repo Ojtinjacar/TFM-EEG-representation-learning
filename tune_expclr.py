@@ -45,8 +45,26 @@ from train_expclr import (  # noqa: E402
 )
 
 DATA = Path("data/processed/all_all")
-FEATURES = Path("data/processed/expert_features/expert_features_P_diverso.npy")
 OUT = Path("save/e3_tuning")
+
+#: Default descriptor. Delta only works when it matches the scale of the descriptor similarities,
+#: so every descriptor needs its own search: the same value is not transferable between them.
+DEFAULT_DESCRIPTOR = "P_diverso"
+
+
+def features_path(descriptor):
+    """Builds the path of a descriptor's aligned expert-feature matrix.
+
+    Args:
+        descriptor: Descriptor label, e.g. "P_full".
+
+    Returns:
+        Path to the corresponding ``.npy`` produced by build_expert_features.py.
+    """
+    return Path("data/processed/expert_features") / f"expert_features_{descriptor}.npy"
+
+
+FEATURES = features_path(DEFAULT_DESCRIPTOR)
 
 #: Delta grid of the paper (App. A.2), plus the value predicted by the bias/variance decomposition.
 #: The predicted one is our addition and is reported as such.
@@ -123,7 +141,7 @@ def split_subjects(subjects: np.ndarray, seed: int = 42) -> tuple[list[str], lis
 
 
 def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[str],
-              seed: int, tau: float = 1.0) -> Path | None:
+              seed: int, tau: float = 1.0, descriptor: str = DEFAULT_DESCRIPTOR) -> Path | None:
     """Pre-trains one configuration, excluding the validation subjects.
 
     Args:
@@ -134,20 +152,22 @@ def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[
         holdout: Validation subjects, excluded from pre-training.
         seed: Seed for reproducibility.
         tau: Hard-negative-mining temperature under test.
+        descriptor: Expert descriptor to search over. It is part of the checkpoint name, so
+            searches for different descriptors never reuse each other's checkpoints.
 
     Returns:
         Checkpoint path, or None if training failed.
     """
     fold_id = f"tune_d{delta}_lr{lr}_t{tau}_{sim_max}_e{epochs}_s{seed}"
     ckpt = Path("save/models") / (
-        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
+        f"ExpCLR_all_all_{fold_id}_{descriptor}_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
     if checkpoint_is_reusable(ckpt, {"delta": delta, "lr": lr, "temperature": tau,
                                      "sim_max": sim_max, "loss_on": "projection",
                                      "dropout": 0.0, "num_epochs": epochs, "seed": seed}):
         return ckpt
     cmd = [sys.executable, "src/train_expclr.py",
-           "--data_path", str(DATA), "--expert_features", str(FEATURES),
-           "--descriptor", "P_diverso", "--zone", "all", "--frequency", "all",
+           "--data_path", str(DATA), "--expert_features", str(features_path(descriptor)),
+           "--descriptor", descriptor, "--zone", "all", "--frequency", "all",
            "--fold_id", fold_id, "--num_epochs", str(epochs), "--seed", str(seed),
            "--delta", str(delta), "--lr", str(lr), "--temperature", str(tau),
            "--loss_on", "projection", "--dropout", "0.0",
@@ -203,15 +223,24 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--quick", action="store_true",
                         help="Solo el eje Delta, al lr del paper para SleepEDF/Waveform (5e-3).")
+    parser.add_argument("--descriptor", default=DEFAULT_DESCRIPTOR,
+                        help="Descriptor experto sobre el que se busca. Cada uno necesita su "
+                             "propia busqueda: Delta depende de la escala de sus similitudes.")
     args = parser.parse_args()
 
     device = torch.device("mps" if torch.backends.mps.is_available()
                           else "cuda" if torch.cuda.is_available() else "cpu")
     OUT.mkdir(parents=True, exist_ok=True)
 
+    features = features_path(args.descriptor)
+    if not features.exists():
+        raise SystemExit(f"No existe el descriptor {args.descriptor} en {features}. "
+                         "Construyelo antes con code/src/build_expert_features.py.")
+
     X = np.asarray(np.load(DATA / "processed_windows.npy", mmap_mode="r"))
     meta = pd.read_csv(DATA / "processed_metadata.csv")
-    F_raw = np.load(FEATURES)
+    F_raw = np.load(features)
+    print(f"descriptor: {args.descriptor} ({F_raw.shape[1]} features)")
     y = meta.age.values.astype(float)
     groups = meta.subject.values
 
@@ -239,7 +268,8 @@ def main() -> None:
         would otherwise be picked as the winner by a comparison against NaN.
         """
         t0 = time.time()
-        ckpt = train_one(delta, lr, sim_max, args.epochs, val_subjects, args.seed, tau)
+        ckpt = train_one(delta, lr, sim_max, args.epochs, val_subjects, args.seed, tau,
+                         descriptor=args.descriptor)
         if ckpt is None:
             return None
         result = score(ckpt, X, meta, y, groups, val_mask, device, args.seed)
@@ -290,7 +320,7 @@ def main() -> None:
             evaluate(best2["delta"], best2["lr"], best2["sim_max"], "3", i, len(taus), tau)
 
     table = pd.DataFrame(rows).sort_values("mae")
-    table.to_csv(OUT / "tuning_results.csv", index=False)
+    table.to_csv(OUT / f"tuning_results_{args.descriptor}.csv", index=False)
     best = table.iloc[0]
 
     print("\n=== mejores configuraciones (ordenadas por MAE) ===")
@@ -308,17 +338,21 @@ def main() -> None:
           f"metrica de validacion esta sesgada al alza por seleccion. La cifra reportable es la "
           f"del LOSO posterior sobre los sujetos restantes, no esta.")
 
-    json.dump({"delta": float(best.delta), "lr": float(best.lr), "tau": float(best.tau),
+    config_path = OUT / f"best_config_{args.descriptor}.json"
+    json.dump({"descriptor": args.descriptor,
+               "delta": float(best.delta), "lr": float(best.lr), "tau": float(best.tau),
                "sim_max": str(best.sim_max),
                "delta_suggested": {k: float(v) for k, v in suggested.items()},
                "mae": float(best.mae), "r2": float(best.r2),
                "random_baseline_mae": float(baseline["mae"]),
                "random_baseline_r2": float(baseline["r2"]),
+               "beats_random_baseline": bool(best.mae < baseline["mae"]),
                "n_configs_compared": len(rows),
                "validation_subjects": val_subjects, "epochs": args.epochs, "seed": args.seed},
-              open(OUT / "best_config.json", "w"), indent=2)
-    print(f"\nGuardado en {OUT}/best_config.json. Lanzar despues:")
-    print(f"  python -u run_e3_loso.py --epochs 50 --config {OUT}/best_config.json")
+              open(config_path, "w"), indent=2)
+    print(f"\nGuardado en {config_path}. Lanzar despues:")
+    print(f"  python -u run_e3_loso.py --epochs 50 --config {config_path}")
+    print(f"  o, para la tabla comparable: run_downstream.py --expclr_config {OUT}")
 
 
 if __name__ == "__main__":

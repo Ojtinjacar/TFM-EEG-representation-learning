@@ -2,6 +2,7 @@ import os
 import subprocess
 import re
 import argparse
+import json
 
 import pandas as pd
 import numpy as np
@@ -36,6 +37,53 @@ EXPCLR_VARIANTS = {
     "ExpCLR-madurativo":   {"descriptor": "P_madurativo",
                             "features": "data/processed/expert_features/expert_features_P_madurativo.npy"},
 }
+
+
+def load_expclr_tuning(config_dir):
+    """Overrides each ExpCLR variant's hyperparameters with its tuned values.
+
+    Delta only works when it matches the scale of a descriptor's similarities, so tune_expclr.py
+    searches every descriptor separately and writes one ``best_config_<descriptor>.json`` per
+    search. Variants without a config keep the paper's defaults.
+
+    Args:
+        config_dir: Directory holding the ``best_config_<descriptor>.json`` files.
+
+    Raises:
+        ValueError: If a config exists but records that no configuration beat the random encoder,
+            since pre-training on it would produce results that are not worth reporting.
+    """
+    for name, variant in EXPCLR_VARIANTS.items():
+        path = os.path.join(config_dir, f"best_config_{variant['descriptor']}.json")
+        if not os.path.exists(path):
+            print(f"[WARNING] No tuned config for {name} at {path}; using the paper's defaults "
+                  f"(delta={EXPCLR_DELTA}, lr={EXPCLR_LR}, tau={EXPCLR_TAU})")
+            continue
+        with open(path) as fh:
+            cfg = json.load(fh)
+        if cfg.get("beats_random_baseline") is False:
+            raise ValueError(
+                f"{path} records that no configuration beat the random encoder for "
+                f"{variant['descriptor']}. Re-running the folds would only reproduce that."
+            )
+        variant.update(delta=cfg["delta"], lr=cfg["lr"], tau=cfg["tau"], sim_max=cfg["sim_max"])
+        print(f"  {name}: delta={cfg['delta']} lr={cfg['lr']} tau={cfg['tau']} "
+              f"sim_max={cfg['sim_max']} (MAE {cfg['mae']:.2f} vs "
+              f"{cfg['random_baseline_mae']:.2f} del encoder aleatorio)")
+
+
+def expclr_hparams(method):
+    """Returns the (delta, lr, tau, sim_max) actually in force for an ExpCLR variant.
+
+    Args:
+        method: Variant name, e.g. "ExpCLR-diverso".
+
+    Returns:
+        Tuple with the margin, learning rate, temperature and sim_max mode.
+    """
+    v = EXPCLR_VARIANTS[method]
+    return (v.get("delta", EXPCLR_DELTA), v.get("lr", EXPCLR_LR),
+            v.get("tau", EXPCLR_TAU), v.get("sim_max", "train"))
 
 # SimCLR variants. Each is a first-class "method": it gets its own pre-training
 # (SimCLR encoder with the given train_simclr.py flags) and its own result rows
@@ -171,10 +219,12 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         )
     elif method in EXPCLR_VARIANTS:
         # Must mirror the checkpoint name built in src/train_expclr.py exactly. The descriptor
-        # label is what distinguishes one variant's checkpoint from another's.
+        # and the tuned hyperparameters are what distinguish one variant's checkpoint from
+        # another's, and a re-tuned run from the one that came before it.
+        delta, lr, tau, _ = expclr_hparams(method)
         model_filename = (
             f"ExpCLR_{zone}_{frequency}_{fold_id}_{EXPCLR_VARIANTS[method]['descriptor']}"
-            f"_batch_{EXPCLR_BATCH_SIZE}_lr_{EXPCLR_LR}_tau_{EXPCLR_TAU}_delta_{EXPCLR_DELTA}.pth"
+            f"_batch_{EXPCLR_BATCH_SIZE}_lr_{lr}_tau_{tau}_delta_{delta}.pth"
         )
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
@@ -231,6 +281,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     elif method in EXPCLR_VARIANTS:
         expclr_data_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
         variant = EXPCLR_VARIANTS[method]
+        delta, lr, tau, sim_max = expclr_hparams(method)
         command = [
             "python", "src/train_expclr.py",
             "--zone", zone,
@@ -240,9 +291,10 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--expert_features", variant["features"],
             "--descriptor", variant["descriptor"],
             "--batch_size", str(EXPCLR_BATCH_SIZE),
-            "--lr", str(EXPCLR_LR),
-            "--temperature", str(EXPCLR_TAU),
-            "--delta", str(EXPCLR_DELTA),
+            "--lr", str(lr),
+            "--temperature", str(tau),
+            "--delta", str(delta),
+            "--sim_max", sim_max,
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
     elif method in VAE_FAMILY:
@@ -975,6 +1027,14 @@ if __name__ == "__main__":
              "'ExpCLR', the P_full reference). E.g. --expclr_variants ExpCLR-diverso."
     )
     parser.add_argument(
+        "--expclr_config",
+        type=str,
+        default=None,
+        help="Directory with tune_expclr.py's best_config_<descriptor>.json files. Each ExpCLR "
+             "variant then pre-trains with its own tuned delta/lr/tau instead of the paper's "
+             "defaults, which degenerate on this descriptor (see docs/expclr.md)."
+    )
+    parser.add_argument(
         "--neighbor_index_dir",
         type=str,
         default="data/processed/neighbor_index",
@@ -1027,4 +1087,7 @@ if __name__ == "__main__":
         help="Force retraining even if model already exists."
     )
     args = parser.parse_args()
+    if args.expclr_config:
+        print(f"Hiperparametros de ExpCLR tuneados, desde {args.expclr_config}:")
+        load_expclr_tuning(args.expclr_config)
     main(args)

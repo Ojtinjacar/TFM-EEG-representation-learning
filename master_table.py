@@ -11,6 +11,7 @@ DIRS = [
     "results_vae",
     "results_expclr",
     "results_expclr_diverso",
+    "results_expclr_madurativo",
 ]
 frames = []
 for d in DIRS:
