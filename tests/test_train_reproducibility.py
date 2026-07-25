@@ -81,7 +81,7 @@ def tiny_dataset(tmp_path_factory):
     return root, features
 
 
-def _train(tiny_dataset, seed, save_dir, fold_id):
+def _train(tiny_dataset, seed, save_dir, fold_id, diagnose_every=5):
     """Runs one short pre-training and returns the resulting state dict."""
     root, features = tiny_dataset
     cmd = [sys.executable, os.path.join(ROOT, "src", "train_expclr.py"),
@@ -91,6 +91,7 @@ def _train(tiny_dataset, seed, save_dir, fold_id):
            # on MPS; below that the direct kernel raises NotImplementedError. See MIN_BATCH_SIZE.
            "--fold_id", fold_id, "--num_epochs", "2", "--batch_size", "32",
            "--embedding_size", "16", "--seed", str(seed),
+           "--diagnose_every", str(diagnose_every),
            "--save_dir", str(save_dir)]
     res = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
     assert res.returncode == 0, res.stderr[-3000:]
@@ -115,3 +116,18 @@ def test_different_seeds_produce_different_encoders(tiny_dataset, tmp_path):
     a = _train(tiny_dataset, 42, tmp_path, "a")
     b = _train(tiny_dataset, 7, tmp_path, "b")
     assert any(not torch.equal(a[k], b[k]) for k in a), "cambiar la semilla no cambio nada"
+
+
+def test_diagnostics_do_not_change_the_trained_weights(tiny_dataset, tmp_path):
+    """An observation-only flag must not be a hyperparameter.
+
+    Diagnosing used to iterate the training DataLoader, which draws a fresh permutation from its
+    generator even when the loop breaks early. That made the batch order -- and therefore the final
+    weights -- depend on --diagnose_every, so the encoder that won a hyperparameter search was not
+    the one later retrained under LOSO.
+    """
+    often = _train(tiny_dataset, 42, tmp_path, "often", diagnose_every=1)
+    rarely = _train(tiny_dataset, 42, tmp_path, "rarely", diagnose_every=1000)
+    for key in often:
+        assert torch.equal(often[key], rarely[key]), (
+            f"el tensor {key} cambia con --diagnose_every: el diagnostico altera el entrenamiento")

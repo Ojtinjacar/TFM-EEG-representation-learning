@@ -14,14 +14,19 @@ E0-E2. The defects, and what this module does instead:
    the standard linear-evaluation protocol (Chen et al. 2020, SimCLR §4.2; Kornblith et al. 2019).
 3. It aggregates predictions by subject and averages the target across visits, so a child seen at
    6 and 36 months contributes a target of 21 months that never happened. Here the unit is the
-   **session**, which is what the target is actually defined on.
+   **session** ``(subject, age, block)``, which is what the target is actually defined on: 274 of
+   them across 152 visits and 45 subjects, since a visit can hold up to three blocks.
 4. Metrics are computed per fold and averaged. Here predictions are pooled out-of-fold and the
    metric is computed once over all sessions, with confidence intervals from a cluster bootstrap
    over subjects, since sessions of the same child are not independent.
 
-The representation used is ``get_embedding()``, the layer *before* the projection head, which is
-where SimCLR documents the linear-evaluation signal to be strongest, and is consistent with the
-ExpCLR loss being applied on the projection.
+The representation used is ``get_embedding()``. Note this is *not* the SimCLR argument about ``h``
+beating ``z`` for linear evaluation: ExpCLR is precisely the method that drops the projection head,
+and the paper optimises ``E(x)`` -- the same representation it evaluates (Secs. 3.6, 4.2). So the
+training loss must be applied here too, which is why ``train_expclr.py`` defaults to
+``--loss_on embedding``. An earlier version of this pipeline trained on the projection and
+evaluated the embedding, shaping a geometry behind a non-invertible ReLU MLP that the probe never
+saw.
 """
 from __future__ import annotations
 

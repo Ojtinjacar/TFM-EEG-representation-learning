@@ -110,6 +110,140 @@ def prepare_descriptor(features, *, quality=None, min_r2=None):
     return F, keep
 
 
+def checkpoint_is_reusable(checkpoint_path, expected):
+    """Decides whether an existing checkpoint was trained under the requested settings.
+
+    Reuse used to be decided by file name alone, which silently returned encoders trained under a
+    different objective whenever a setting was absent from the name: the switch from
+    ``--loss_on projection`` to ``embedding`` became a no-op because 45 checkpoints already existed
+    at the expected paths. Comparing against the sidecar closes that class of bug for every
+    setting, including ones added later.
+
+    A checkpoint with no sidecar is treated as not reusable: it predates this check and its
+    provenance is unknown.
+
+    Args:
+        checkpoint_path: Path of the ``.pth`` under consideration.
+        expected: Mapping of sidecar keys to the values the caller requires.
+
+    Returns:
+        True if the checkpoint exists and every requested key matches.
+    """
+    checkpoint_path = str(checkpoint_path)
+    if not os.path.exists(checkpoint_path):
+        return False
+    sidecar = checkpoint_path.replace(".pth", "_config.json")
+    if not os.path.exists(sidecar):
+        return False
+    with open(sidecar) as fh:
+        recorded = json.load(fh)
+    for key, value in expected.items():
+        if key not in recorded:
+            return False
+        if isinstance(value, float) and isinstance(recorded[key], (int, float)):
+            if not np.isclose(recorded[key], value):
+                return False
+        elif recorded[key] != value:
+            return False
+    return True
+
+
+def effective_dimensionality(z):
+    """Measures how many directions a representation actually uses.
+
+    Computed as ``exp(H)`` over the normalised PCA eigenvalues, so a cloud spread evenly over k
+    directions scores k and one collapsed onto a single axis scores 1. This is the diagnostic that
+    exposes a contracting encoder: the ExpCLR loss can fall steadily while the representation
+    collapses onto two or three directions, in which case a falling loss looks like convergence and
+    is in fact damage. Tracking it alongside the loss is what makes that visible during training.
+
+    Args:
+        z: Representation matrix of shape (n_samples, n_features).
+
+    Returns:
+        Effective dimensionality as a float, between 1 and n_features.
+    """
+    # A diverged encoder produces NaN or inf, on which np.linalg.svd raises and would otherwise
+    # abort a whole hyperparameter sweep instead of just discarding that configuration.
+    if not np.isfinite(z).all():
+        return float("nan")
+    centred = z - z.mean(axis=0, keepdims=True)
+    eigenvalues = np.linalg.svd(centred, compute_uv=False) ** 2
+    total = eigenvalues.sum()
+    if total <= 0:
+        return 1.0
+    p = eigenvalues / total
+    p = p[p > 0]
+    return float(np.exp(-(p * np.log(p)).sum()))
+
+
+def equidistant_reference(n, device):
+    """Builds the distance matrix of a perfectly equidistant cloud, as ``mu_i`` normalises it.
+
+    Not a matrix of ones. ``mu_i`` averages over all N entries of row i including ``dist_ii = 0``,
+    so if every off-diagonal distance equals some c, the row mean is ``c*(N-1)/N``; forcing that to
+    the 1 the normalisation imposes gives ``c = N/(N-1)``. A matrix of ones has row mean
+    ``(N-1)/N`` and is therefore produced by no embedding at all, which understated the reference
+    floor by about 6 % at N=64 -- precisely in the regime where the warning has to fire.
+
+    Args:
+        n: Batch size.
+        device: Torch device.
+
+    Returns:
+        Matrix of shape (n, n), zero on the diagonal and ``n/(n-1)`` elsewhere.
+    """
+    ref = torch.full((n, n), n / (n - 1.0), device=device)
+    ref.fill_diagonal_(0.0)
+    return ref
+
+
+@torch.no_grad()
+def diagnose_epoch(model, batches, criterion, device, loss_on):
+    """Measures the geometry of the representation after a training epoch.
+
+    Reports the effective dimensionality and the loss of the *equidistant* geometry, the degenerate
+    optimum the objective falls into when ``Delta`` does not match the scale of the descriptor
+    similarities. A training loss approaching that reference means the encoder is learning to place
+    every pair at the same distance, i.e. the least informative geometry available, rather than
+    reproducing the expert geometry.
+
+    Takes pre-drawn batches rather than a DataLoader on purpose. Iterating a shuffling loader draws
+    a fresh permutation from its generator even if the loop breaks early, which made
+    ``--diagnose_every`` silently change the batch order of training and therefore the final
+    weights: an observation-only flag acting as a hyperparameter. Fixed batches also make the
+    estimate comparable across epochs instead of resampling noise.
+
+    Args:
+        model: Encoder under training.
+        batches: Fixed list of (windows, features) tensors to measure on.
+        criterion: The ExpCLR loss, used to recompute the reference on the same batches.
+        device: Torch device.
+        loss_on: Either "projection" or "embedding", matching the training objective.
+
+    Returns:
+        Dict with ``effective_dim`` and ``equidistant_loss``.
+    """
+    was_training = model.training
+    model.eval()
+    reps, references = [], []
+    for x_batch, f_batch in batches:
+        x_batch, f_batch = x_batch.to(device), f_batch.to(device)
+        z = model(x_batch) if loss_on == "projection" else model.get_embedding(x_batch)
+        reps.append(z.cpu().numpy())
+        target = (1.0 - criterion.expert_similarity(f_batch)) * criterion.delta
+        # Scored with the loss actually being optimised, so the two are comparable. Using the mean
+        # (Eq. 3) against a log-sum-exp training loss (Eq. 4) made the warning unfirable by Jensen.
+        references.append(float(criterion.reduce(
+            (target - equidistant_reference(len(target), target.device)).pow(2))))
+    if was_training:
+        model.train()
+    return {
+        "effective_dim": effective_dimensionality(np.concatenate(reps, axis=0)),
+        "equidistant_loss": float(np.mean(references)),
+    }
+
+
 def set_seed(seed):
     """Seeds every source of randomness that affects the trained encoder.
 
@@ -236,7 +370,20 @@ def main(args):
         squared_similarity=not args.linear_similarity,
     )
 
-    losses = []
+    # Fixed batches, drawn once from a generator of their own so the training loader's RNG is
+    # untouched and the measurements stay comparable across epochs.
+    diag_rng = torch.Generator().manual_seed(args.seed + 1)
+    diag_idx = torch.randperm(len(dataset), generator=diag_rng)[:8 * args.batch_size]
+    diag_batches = [(X[diag_idx[i:i + args.batch_size]], F[diag_idx[i:i + args.batch_size]])
+                    for i in range(0, len(diag_idx), args.batch_size)
+                    if len(diag_idx[i:i + args.batch_size]) >= 2]
+
+    baseline = diagnose_epoch(model, diag_batches, criterion, device, args.loss_on)
+    print(f"Before training: effective dim {baseline['effective_dim']:.2f} | "
+          f"equidistant-geometry loss {baseline['equidistant_loss']:.4f} "
+          f"(the loss cannot go meaningfully below this unless Delta matches the descriptor)")
+
+    losses, diagnostics = [], [baseline]
     for epoch in range(args.num_epochs):
         model.train()
         total_loss = 0.0
@@ -252,7 +399,26 @@ def main(args):
         scheduler.step()
         epoch_loss = total_loss / len(train_loader)
         losses.append(epoch_loss)
-        print(f"Epoch [{epoch + 1}/{args.num_epochs}], Loss: {epoch_loss:.4f}")
+        # Diagnosed every few epochs: a falling loss with a falling effective dimensionality is
+        # contraction, not convergence.
+        if epoch % args.diagnose_every == 0 or epoch == args.num_epochs - 1:
+            diag = diagnose_epoch(model, diag_batches, criterion, device, args.loss_on)
+            diagnostics.append(diag)
+            print(f"Epoch [{epoch + 1}/{args.num_epochs}], Loss: {epoch_loss:.4f} | "
+                  f"effective dim {diag['effective_dim']:.2f} | "
+                  f"equidistant ref {diag['equidistant_loss']:.4f}")
+        else:
+            print(f"Epoch [{epoch + 1}/{args.num_epochs}], Loss: {epoch_loss:.4f}")
+
+    final = diagnostics[-1]
+    if final["effective_dim"] < baseline["effective_dim"]:
+        print(f"WARNING: effective dimensionality fell from {baseline['effective_dim']:.2f} to "
+              f"{final['effective_dim']:.2f}. The encoder contracted the representation; the probe "
+              f"has fewer directions to work with than before training.")
+    if losses[-1] <= final["equidistant_loss"] * 1.05:
+        print(f"WARNING: final loss {losses[-1]:.4f} is at the equidistant-geometry floor "
+              f"{final['equidistant_loss']:.4f}. Delta is mismatched to the descriptor scale, so "
+              f"most of the objective is an irreducible bias rather than learnable signal.")
 
     fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
     model_path = os.path.join(
@@ -271,10 +437,20 @@ def main(args):
                 "descriptor_dim": int(F.shape[1]),
                 "n_windows": int(len(X)),
                 "feat_max_dist": feat_max_dist,
+                # Everything a caller must match before reusing this checkpoint. Reuse is decided by
+                # comparing against these, not by the file name: a setting missing from the name
+                # would otherwise be silently inherited from a previous run.
                 "delta": args.delta,
                 "temperature": None if args.no_hard_negative_mining else args.temperature,
                 "loss_on": args.loss_on,
+                "sim_max": args.sim_max,
+                "lr": args.lr,
+                "batch_size": args.batch_size,
+                "num_epochs": args.num_epochs,
+                "seed": args.seed,
+                "exclude_subjects": sorted(args.exclude_subjects),
                 "final_loss": losses[-1] if losses else None,
+                "effective_dim": final["effective_dim"],
             },
             fh,
             indent=2,
@@ -332,9 +508,16 @@ if __name__ == "__main__":
     parser.add_argument("--sim_max", choices=["train", "batch"], default="train",
                         help="Whether max_kl ||f_k - f_l|| is taken over the training split or "
                              "per batch. 'train' avoids leaking the held-out fold.")
-    parser.add_argument("--loss_on", choices=["projection", "embedding"], default="projection",
-                        help="Apply the loss to the projection head output (repo convention for "
-                             "SimCLR) or directly to the evaluated embedding.")
+    parser.add_argument("--loss_on", choices=["projection", "embedding"], default="embedding",
+                        help="Where the loss is applied. Defaults to 'embedding' because ExpCLR "
+                             "has no projection head: the paper optimises E(x), the very same "
+                             "representation it evaluates (Secs. 3.6 and 4.2). Applying it to the "
+                             "projection would shape a geometry behind a non-invertible ReLU MLP "
+                             "that the probe never sees. 'projection' is kept for the SimCLR-style "
+                             "ablation only.")
+    parser.add_argument("--diagnose_every", type=int, default=5,
+                        help="Epoch interval for the geometry diagnostics (effective "
+                             "dimensionality and equidistant-geometry reference).")
     parser.add_argument("--min_apsd_r2", type=float, default=None,
                         help="Optional quality filter on the mean specparam R^2 per window.")
     parser.add_argument("--save_dir", default="save/models", help="Checkpoint directory.")

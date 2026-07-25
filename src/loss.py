@@ -177,8 +177,21 @@ class ExpCLRLoss(torch.nn.Module):
 
         sim = self.expert_similarity(f.detach())
         dist = self.normalized_distance(z)
-        pair_loss = ((1.0 - sim) * self.delta - dist).pow(2)
+        return self.reduce(((1.0 - sim) * self.delta - dist).pow(2))
 
+    def reduce(self, pair_loss):
+        """Reduces per-pair terms to the scalar objective, Eq. 3 or Eq. 4.
+
+        Exposed so that reference geometries can be scored with the very functional being
+        optimised. Comparing a mean (Eq. 3) against a log-sum-exp (Eq. 4) is not meaningful: by
+        Jensen the latter is always the larger of the two.
+
+        Args:
+            pair_loss: Matrix of per-pair terms ``L_ij``.
+
+        Returns:
+            Scalar loss tensor.
+        """
         if self.temperature is None:
             # Eq. 3: no hard-negative mining (the NHNM ablation).
             return pair_loss.mean()

@@ -31,6 +31,7 @@ from eval_expclr import (  # noqa: E402
     metrics_by_visit, paired_bootstrap_difference, session_metrics,
 )
 from models import EnhancedAttentionLSTM  # noqa: E402
+from train_expclr import checkpoint_is_reusable  # noqa: E402
 
 DATA = Path("data/processed/all_all")
 FEATURES = Path("data/processed/expert_features/expert_features_P_diverso.npy")
@@ -47,13 +48,18 @@ def load_data() -> tuple[np.ndarray, pd.DataFrame, np.ndarray]:
     return X, meta, F
 
 
-def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int = 42) -> Path:
+def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int = 42,
+                  delta: float = 1.0, lr: float = 5e-3, sim_max: str = "train") -> Path:
     """Pre-trains one ExpCLR encoder excluding a subject, and returns its checkpoint path.
 
-    The fold id carries the held-out subject, a tag, the epoch count and the seed, so checkpoints
-    of different variants, targets, training budgets or seeds can never collide. Checkpoint reuse
-    is keyed on that path, so leaving any of them out would silently resume a sweep with encoders
-    trained under different settings.
+    The fold id carries the held-out subject, a tag, the epoch count and the seed, and the file
+    name additionally carries the learning rate, tau and Delta, so checkpoints of different
+    variants, budgets, seeds or hyperparameters can never collide. Checkpoint reuse is keyed on
+    that path, so leaving any of them out would silently resume a sweep with encoders trained
+    under different settings.
+
+    The loss is applied to the embedding, not to the projection: ExpCLR has no projection head and
+    optimises the same representation it evaluates.
 
     Args:
         subject: Subject held out for testing.
@@ -61,6 +67,11 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int
         features: Descriptor matrix to guide the loss.
         tag: Short label distinguishing the variant.
         seed: Seed for the encoder initialisation and the batch order.
+        delta: Margin ``Delta`` of Eq. 3/4. Must match the scale of the descriptor similarities,
+            see :func:`suggest_delta` in ``tune_expclr.py``.
+        lr: Learning rate for Adam.
+        sim_max: Whether ``max_kl ||f_k - f_l||`` is taken over the training split or per batch.
+            It changes the scale of the similarities and therefore interacts with ``delta``.
 
     Returns:
         Path of the written checkpoint.
@@ -68,16 +79,21 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int
     Raises:
         RuntimeError: If the training subprocess fails or the checkpoint does not appear.
     """
-    fold_id = f"loso_{tag}_e{epochs}_s{seed}_{subject}"
+    fold_id = f"loso_{tag}_e{epochs}_s{seed}_{sim_max}_{subject}"
     ckpt = Path("save/models") / (
-        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_0.005_tau_1.0_delta_1.0.pth")
-    if ckpt.exists():
+        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_1.0_delta_{delta}.pth")
+    # Reuse is decided against the recorded configuration, never against the path alone: settings
+    # absent from the file name would otherwise be inherited silently from an earlier run.
+    expected = {"delta": delta, "lr": lr, "loss_on": "embedding", "sim_max": sim_max,
+                "num_epochs": epochs, "seed": seed, "exclude_subjects": [subject]}
+    if checkpoint_is_reusable(ckpt, expected):
         return ckpt
     cmd = [sys.executable, "src/train_expclr.py",
            "--data_path", str(DATA), "--expert_features", str(features),
            "--descriptor", "P_diverso", "--zone", "all", "--frequency", "all",
            "--fold_id", fold_id, "--num_epochs", str(epochs), "--seed", str(seed),
-           "--exclude_subjects", subject]
+           "--delta", str(delta), "--lr", str(lr), "--loss_on", "embedding",
+           "--sim_max", sim_max, "--exclude_subjects", subject]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not ckpt.exists():
         raise RuntimeError(f"fallo el preentrenamiento de {subject}:\n{res.stdout[-2000:]}\n{res.stderr[-2000:]}")
@@ -165,7 +181,9 @@ class EmbeddingCache:
         return {"hits": self._hits, "misses": self._misses}
 
 
-def run_loso(methods: list[str], epochs: int, device, seed: int = 42) -> dict[str, pd.DataFrame]:
+def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: float = 1.0,
+             lr: float = 5e-3, sim_max: str = "train",
+             exclude_subjects: list[str] | None = None) -> dict[str, pd.DataFrame]:
     """Runs leave-one-subject-out for every requested method, sharing folds and probe.
 
     Args:
@@ -174,19 +192,32 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42) -> dict[st
         device: Torch device.
         seed: Seed shared by every fold, so what varies across folds is the held-out subject and
             not the initialisation.
+        delta: Margin ``Delta``, to be taken from the tuning run rather than copied from the paper.
+        lr: Learning rate, likewise.
+        sim_max: Where ``max_kl`` is taken, likewise.
+        exclude_subjects: Subjects dropped entirely, meant for the ones whose labels were seen while
+            selecting the hyperparameters. Keeping them would make the out-of-fold error optimistic
+            with respect to that selection.
 
     Returns:
         Mapping from method name to its out-of-fold session-level predictions.
     """
     X, meta, F = load_data()
+    if exclude_subjects:
+        keep = ~meta.subject.isin(exclude_subjects).values
+        meta = meta[keep].reset_index(drop=True)
+        X, F = X[keep], F[keep]
+        print(f"Excluidos {len(exclude_subjects)} sujetos usados para ajustar hiperparametros: "
+              f"{sorted(exclude_subjects)}")
     subjects = sorted(meta.subject.unique())
     y = meta.age.values.astype(float)
     groups = meta.subject.values
     print(f"LOSO sobre {len(subjects)} sujetos | {len(meta)} ventanas | descriptor {F.shape}")
 
-    shuffled_path = FEATURES.with_name("expert_features_P_diverso_shuffled.npy")
-    if "B3" in methods and not shuffled_path.exists():
+    shuffled_path = FEATURES.with_name(f"expert_features_P_diverso_shuffled_s{seed}.npy")
+    if "B3" in methods:
         # B3: same descriptor, permuted across windows. Isolates the geometry from the loss shape.
+        # Regenerated every run so the seed actually reaches the permutation.
         rng = np.random.default_rng(seed)
         np.save(shuffled_path, F[rng.permutation(len(F))])
 
@@ -206,16 +237,19 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42) -> dict[st
                 if method == "B1":
                     Xtr, Xte = F[train], F[test]
                 else:
-                    emb = cache.get(pretrain_fold(subject, epochs, FEATURES, "expclr", seed))
+                    emb = cache.get(pretrain_fold(subject, epochs, FEATURES, "expclr", seed,
+                                                  delta, lr, sim_max))
                     Xtr = np.hstack([emb[train], F[train]])
                     Xte = np.hstack([emb[test], F[test]])
                 scaler, probe = fit_probe(Xtr, y[train], groups[train])
                 pred_test = probe.predict(scaler.transform(Xte))
             else:                                   # métodos con encoder
                 if method == "ExpCLR":
-                    ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr", seed)
+                    ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr", seed, delta, lr,
+                                         sim_max)
                 elif method == "B3":
-                    ckpt = pretrain_fold(subject, epochs, shuffled_path, "shuffled", seed)
+                    ckpt = pretrain_fold(subject, epochs, shuffled_path, "shuffled", seed,
+                                         delta, lr, sim_max)
                 elif method == "B2":
                     ckpt = None                     # encoder aleatorio
                 else:
@@ -244,14 +278,42 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42,
                         help="Semilla compartida por los 45 folds: lo que varia entre folds es el "
                              "sujeto excluido, no la inicializacion.")
+    parser.add_argument("--delta", type=float, default=1.0,
+                        help="Margen Delta. El 1.0 del paper solo es valido si la media de "
+                             "(1 - s_ij) del descriptor vale 1; con P_diverso no es asi. "
+                             "Tomar el valor de tune_expclr.py.")
+    parser.add_argument("--lr", type=float, default=5e-3,
+                        help="Learning rate de Adam. El paper lo optimiza por dataset (Tab. 9), "
+                             "asi que tomarlo tambien de tune_expclr.py.")
+    parser.add_argument("--sim_max", choices=["train", "batch"], default="train",
+                        help="Donde se toma max_kl ||f_k - f_l||. El paper permite ambas "
+                             "(Sec. 3.4) y cambia la escala de s_ij, luego interactua con Delta. "
+                             "Tomarlo de tune_expclr.py.")
+    parser.add_argument("--exclude_subjects", nargs="*", default=[],
+                        help="Sujetos que se excluyen del LOSO por haberse usado para ajustar "
+                             "hiperparametros. Ver validation_subjects en best_config.json.")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="Lee delta, lr, sim_max y los sujetos de validacion del "
+                             "best_config.json que escribe tune_expclr.py, en vez de a mano.")
     args = parser.parse_args()
+
+    if args.config:
+        # Reading the tuning output wholesale avoids transcribing four settings by hand, which is
+        # how a tuned sim_max silently failed to reach the final run before.
+        cfg = json.loads(args.config.read_text())
+        args.delta, args.lr = cfg["delta"], cfg["lr"]
+        args.sim_max = cfg.get("sim_max", args.sim_max)
+        args.exclude_subjects = cfg["validation_subjects"]
+        print(f"config de {args.config}: delta={args.delta} lr={args.lr} "
+              f"sim_max={args.sim_max} | {len(args.exclude_subjects)} sujetos excluidos")
 
     device = torch.device("mps" if torch.backends.mps.is_available()
                           else "cuda" if torch.cuda.is_available() else "cpu")
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"device: {device} | epocas: {args.epochs} | metodos: {args.methods}")
 
-    results = run_loso(args.methods, args.epochs, device, args.seed)
+    results = run_loso(args.methods, args.epochs, device, args.seed, args.delta, args.lr,
+                       args.sim_max, args.exclude_subjects)
 
     rows = []
     for method, sessions in results.items():
