@@ -3,6 +3,7 @@ import subprocess
 import argparse
 import re
 import random
+import sys
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -21,6 +22,7 @@ def find_latest_model(model_dir, pattern):
         return None
 
 def main(args):
+    parse_failures = 0
     # --- Iteration Setup ---
     BANDS = {
         "theta": [3.0, 6.0],
@@ -192,7 +194,7 @@ def main(args):
                 # --- 4. Collecting Results ---
                 print(f"  [4/4] Collecting results for {run_id}...")
                 output = result.stdout
-                match = re.search(r"Test nRMSE \(Subject-Avg\)=([\d.]+)", output)
+                match = re.search(r"Test nRMSE \(Subject-Avg\)=([\d.]+|nan)", output)
 
                 if match:
                     nrmse = float(match.group(1))
@@ -204,12 +206,16 @@ def main(args):
                         "nrmse": nrmse
                     })
                 else:
-                    print("        WARNING: Could not find nRMSE in the output.")
+                    parse_failures += 1
+                    print("        ERROR: Could not find nRMSE in the output.")
 
     # --- 5. Final Visualization ---
+    if parse_failures:
+        print(f"\n[ERROR] {parse_failures} runs produced unparseable output; "
+              "their results are missing from the summary.")
     if not results:
         print("\nNo results collected. Cannot generate plot.")
-        return
+        sys.exit(1)
 
     print("\n=== GENERATING RESULTS PLOT ===")
     results_df = pd.DataFrame(results)

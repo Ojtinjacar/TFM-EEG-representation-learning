@@ -4,19 +4,28 @@ import pandas as pd
 from sklearn.metrics import r2_score
 
 DIRS = [
-    "results_paper_baseline/save/downstream_results",
-    "results_neighbor",
-    "results_ablation",
-    "results_vae",
+    "results_paper_baseline_legacy/save/downstream_results",
+    "results_neighbor_legacy",
+    "results_ablation_legacy",
+    "results_vae_legacy",
     "results_expclr",
     "results_expclr_diverso",
     "results_expclr_madurativo",
 ]
 frames = []
 for d in DIRS:
-    for f in sorted(glob.glob(f"{d}/downstream_raw_results_kfold_folds*.csv")):
-        frames.append(pd.read_csv(f))
+    files = sorted(glob.glob(f"{d}/downstream_raw_results_kfold*.csv"))
+    if not files:
+        print(f"[WARN] no result CSVs under {d}")
+    frames.extend(pd.read_csv(f) for f in files)
 df = pd.concat(frames, ignore_index=True)
+
+# Re-runs and overlapping fold ranges must not double-count subject averages.
+n_before = len(df)
+df = df.drop_duplicates(subset=["fold", "method", "eval_mode", "target"], keep="first")
+if len(df) != n_before:
+    print(f"[WARN] dropped {n_before - len(df)} duplicated (fold, method, "
+          f"eval_mode, target) rows before pooling")
 
 
 def parse(s):

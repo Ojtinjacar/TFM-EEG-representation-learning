@@ -194,7 +194,9 @@ def run_epoch_regression(model, loader, criterion, optimizer, device, train=True
     mse = mean_squared_error(all_targets, all_preds)
     rmse = np.sqrt(mse)
     std_y = all_targets.std()
-    nrmse = rmse if std_y < 1e-8 else rmse / std_y
+    # A degenerate target (constant y) has no defined nRMSE; never fall back
+    # to the unnormalized RMSE, which silently mixes metric definitions.
+    nrmse = np.nan if std_y < 1e-8 else rmse / std_y
 
     return running_loss, nrmse, rmse, all_targets, all_preds, all_subjects
 
@@ -232,6 +234,31 @@ def train_model_regression(
     return model
 
 
+def subject_level_metrics(df_results):
+    """Computes per-subject regression metrics from window-level predictions.
+
+    Subjects whose target is constant have no defined nRMSE/R2: both are NaN
+    for them (never a silent fallback to the unnormalized RMSE).
+
+    Args:
+        df_results (pd.DataFrame): Columns 'y_true', 'y_pred', 'subject'.
+
+    Returns:
+        pd.DataFrame: One row per subject with 'rmse', 'nrmse' and 'r2'.
+    """
+    subject_metrics = []
+    for subject_id in sorted(df_results['subject'].unique()):
+        df_subj = df_results[df_results['subject'] == subject_id]
+        subj_y_true = df_subj['y_true'].values
+        subj_y_pred = df_subj['y_pred'].values
+        subj_rmse = np.sqrt(mean_squared_error(subj_y_true, subj_y_pred))
+        subj_std_y = subj_y_true.std()
+        subj_nrmse = np.nan if subj_std_y < 1e-8 else subj_rmse / subj_std_y
+        subj_r2 = r2_score(subj_y_true, subj_y_pred) if subj_std_y >= 1e-8 else np.nan
+        subject_metrics.append({'rmse': subj_rmse, 'nrmse': subj_nrmse, 'r2': subj_r2})
+    return pd.DataFrame(subject_metrics)
+
+
 def evaluate_and_plot(
     model,
     test_loader,
@@ -253,33 +280,19 @@ def evaluate_and_plot(
         'subject': test_subjects
     })
 
-    subject_metrics = []
     unique_test_subjects = sorted(df_results['subject'].unique())
-    for subject_id in unique_test_subjects:
-        df_subj = df_results[df_results['subject'] == subject_id]
-        subj_y_true = df_subj['y_true'].values
-        subj_y_pred = df_subj['y_pred'].values
+    df_subject_metrics = subject_level_metrics(df_results)
 
-        if len(df_subj) > 0:
-            subj_mse = mean_squared_error(subj_y_true, subj_y_pred)
-            subj_rmse = np.sqrt(subj_mse)
-            subj_std_y = subj_y_true.std()
-            subj_nrmse = subj_rmse if subj_std_y < 1e-8 else subj_rmse / subj_std_y
-            subj_r2 = r2_score(subj_y_true, subj_y_pred) if len(df_subj) > 1 else np.nan
-
-            subject_metrics.append({
-                'rmse': subj_rmse,
-                'nrmse': subj_nrmse,
-                'r2': subj_r2
-            })
-
-    # 3. Aggregate subject metrics to obtain the final result
-    df_subject_metrics = pd.DataFrame(subject_metrics)
-
-    # Average each subject's metrics to give them equal weight
+    # Average each subject's metrics to give them equal weight. pandas mean()
+    # skips NaN, so degenerate subjects (constant y) are excluded rather than
+    # polluting the average with a different metric definition.
     final_nrmse = df_subject_metrics['nrmse'].mean()
     final_rmse = df_subject_metrics['rmse'].mean()
     final_r2 = df_subject_metrics['r2'].mean()
+    n_degenerate = int(df_subject_metrics['nrmse'].isna().sum())
+    if n_degenerate:
+        print(f"[{model_tag}] {n_degenerate}/{len(df_subject_metrics)} test subjects "
+              f"have a constant target (nRMSE/R2 undefined, excluded from the average).")
 
     print(f"[{model_tag}] Test loss={test_loss:.4f}, Test nRMSE (Subject-Avg)={final_nrmse:.4f}, Test RMSE (Subject-Avg)={final_rmse:.2f}, Test R2 (Subject-Avg)={final_r2:.4f}")
 
@@ -290,6 +303,12 @@ def evaluate_and_plot(
         subj_y_true_mean = df_subj['y_true'].mean()
         subj_y_pred_mean = df_subj['y_pred'].mean()
         print(f"SUBJECT_AVG_PRED: {subj_y_true_mean:.6f} {subj_y_pred_mean:.6f}")
+
+    # 5. Session-level average predictions (one line per subject x target value;
+    # for the age target each distinct y_true is one session/visit). This is the
+    # canonical aggregation level, matching the E3 protocol.
+    for (subject_id, y_val), df_sess in df_results.groupby(['subject', 'y_true']):
+        print(f"SESSION_AVG_PRED: {subject_id} {y_val:.6f} {df_sess['y_pred'].mean():.6f}")
 
     # --- Regression plot ---
     os.makedirs(plot_dir, exist_ok=True)

@@ -96,10 +96,11 @@ def parse_output(output):
     Returns: (nrmse, r2, rmse, subject_avgs)
     where subject_avgs is a list of tuples: [(y_true_mean, y_pred_mean), ...]
     """
-    # Search for metrics in "Subject-Avg" format
-    nrmse_match = re.search(r"Test nRMSE \(Subject-Avg\)=([\d.]+)", output)
-    r2_match = re.search(r"Test R2 \(Subject-Avg\)=([\d.-]+)", output)
-    rmse_match = re.search(r"Test RMSE \(Subject-Avg\)=([\d.]+)", output)
+    # Search for metrics in "Subject-Avg" format. 'nan' is a legal value (e.g.
+    # a fully degenerate target): it must parse, not silently drop the fold.
+    nrmse_match = re.search(r"Test nRMSE \(Subject-Avg\)=([\d.]+|nan)", output)
+    r2_match = re.search(r"Test R2 \(Subject-Avg\)=(-?[\d.]+|nan)", output)
+    rmse_match = re.search(r"Test RMSE \(Subject-Avg\)=([\d.]+|nan)", output)
 
     nrmse = float(nrmse_match.group(1)) if nrmse_match else None
     r2 = float(r2_match.group(1)) if r2_match else None
@@ -112,13 +113,18 @@ def parse_output(output):
     # Parse per-subject average predictions for global R² calculation
     # Format: SUBJECT_AVG_PRED: y_true_mean y_pred_mean
     subject_avgs = []
+    session_avgs = []
     for line in output.split('\n'):
         if line.startswith('SUBJECT_AVG_PRED:'):
             parts = line.split(': ')[1].split()
             if len(parts) == 2:
                 subject_avgs.append((float(parts[0]), float(parts[1])))
+        elif line.startswith('SESSION_AVG_PRED:'):
+            parts = line.split(': ')[1].split()
+            if len(parts) == 3:
+                session_avgs.append((parts[0], float(parts[1]), float(parts[2])))
 
-    return nrmse, r2, rmse, subject_avgs
+    return nrmse, r2, rmse, subject_avgs, session_avgs
 
 def config_data_paths(zone, frequency):
     cfg_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
@@ -345,10 +351,10 @@ def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_
         print(f"[ERROR] Downstream command failed")
         print("STDOUT:", e.stdout)
         print("STDERR:", e.stderr)
-        return None, None, None, []
+        return None, None, None, [], []
     except Exception as e:
         print(f"[ERROR] An unexpected error occurred: {e}")
-        return None, None, None, []
+        return None, None, None, [], []
 
 
 def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_modes, target_subject_dict):
@@ -554,7 +560,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     continue
 
                 # Run downstream with the filtered subjects for this target
-                nrmse, r2, rmse, subject_avgs = run_downstream_experiment(
+                nrmse, r2, rmse, subject_avgs, session_avgs = run_downstream_experiment(
                     method=method,
                     eval_mode=eval_mode,
                     target=target,
@@ -568,22 +574,25 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     cond_dim=args.cvae_cond_dim,
                 )
 
-                if nrmse is not None and r2 is not None and rmse is not None:
+                if subject_avgs:
                     result_entry = {
                         "fold": fold_idx,
                         "method": method,
                         "eval_mode": eval_mode,
                         "target": target,
-                        "nRMSE": nrmse,
-                        "R2": r2,
-                        "RMSE": rmse,
-                        "subject_avgs": subject_avgs  # List of (y_true, y_pred) per-subject averages
+                        "nRMSE": np.nan if nrmse is None else nrmse,
+                        "R2": np.nan if r2 is None else r2,
+                        "RMSE": np.nan if rmse is None else rmse,
+                        "subject_avgs": subject_avgs,  # List of (y_true, y_pred) per-subject averages
+                        "session_avgs": session_avgs,  # List of (subject, y_true, y_pred) per session
                     }
 
                     fold_results.append(result_entry)
-                    print(f"    ✓ nRMSE={nrmse:.4f}, R2={r2:.4f}, RMSE={rmse:.2f}", flush=True)
+                    print(f"    ✓ nRMSE={result_entry['nRMSE']:.4f}, R2={result_entry['R2']:.4f}, "
+                          f"RMSE={result_entry['RMSE']:.2f}", flush=True)
                 else:
-                    print(f"    [ERROR] Failed to get metrics")
+                    fold_failures.append((method, eval_mode, target))
+                    print(f"    [ERROR] Failed to get metrics/predictions")
 
     print(f"\n{'='*80}", flush=True)
     print(f"FOLD {fold_idx+1} COMPLETED: Collected {len(fold_results)} results", flush=True)
@@ -771,6 +780,7 @@ def main(args):
     for result in all_results:
         # Convert subject_avgs to strings for saving in CSV
         subject_avgs_str = ';'.join([f"{y_true},{y_pred}" for y_true, y_pred in result['subject_avgs']])
+        session_avgs_str = ';'.join([f"{subj},{y_true},{y_pred}" for subj, y_true, y_pred in result.get('session_avgs', [])])
 
         # Save basic metrics + subject_avgs
         row = {
@@ -781,7 +791,8 @@ def main(args):
             'nRMSE': result['nRMSE'],
             'R2': result['R2'],
             'RMSE': result['RMSE'],
-            'subject_avgs': subject_avgs_str  # New field
+            'subject_avgs': subject_avgs_str,
+            'session_avgs': session_avgs_str
         }
         df_raw_data.append(row)
 
