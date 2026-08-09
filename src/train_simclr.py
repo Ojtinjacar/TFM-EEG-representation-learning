@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
 from checkpoint_naming import simclr_checkpoint_name, write_sidecar
+from utils import set_seed
 from loss import NTXentLoss
 from models import EnhancedAttentionLSTM
 
@@ -222,7 +223,8 @@ def main(args):
     else:
         full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
         print(f"Positives=augment aug_mode={args.aug_mode}")
-    train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+                              generator=torch.Generator().manual_seed(args.seed))
     eval_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=False)
 
     model = EnhancedAttentionLSTM(
@@ -440,5 +442,12 @@ if __name__ == "__main__":
         help="Directory with neighbor_index_<metric>.npy (from build_neighbor_index.py)."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
     main(args)

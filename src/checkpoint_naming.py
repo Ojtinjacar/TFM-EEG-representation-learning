@@ -148,10 +148,12 @@ def checkpoint_is_reusable(checkpoint_path, expected, allow_legacy=False):
         if not allow_legacy:
             print(f"[REUSE] {name}: legacy checkpoint; refused without allow_legacy.")
             return False
-        if "exclude_subjects" not in recorded:
+        if recorded.get("exclude_subjects") is None:
             print(f"[REUSE] {name}: legacy sidecar lacks exclude_subjects; not reusable.")
             return False
-        keys = [k for k in expected if k in recorded]
+        # Legacy sidecars are partial records: keys they do not carry (absent
+        # or recorded as null, e.g. the seed) are skipped instead of fatal.
+        keys = [k for k in expected if recorded.get(k) is not None]
         if "exclude_subjects" in expected and "exclude_subjects" not in keys:
             print(f"[REUSE] {name}: expected exclude_subjects but sidecar lacks it.")
             return False

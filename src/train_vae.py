@@ -13,7 +13,7 @@ from models import (
     ConditionalVariationalAttentionLSTMAutoencoder,
 )
 from checkpoint_naming import vae_checkpoint_name, write_sidecar
-from utils import split_dataset, create_dataloader, ages_to_indices, CANONICAL_AGES
+from utils import split_dataset, create_dataloader, ages_to_indices, CANONICAL_AGES, set_seed
 from loss import build_prior, vae_elbo, kl_beta
 
 
@@ -271,9 +271,26 @@ def main():
              "(same architecture, different prior) get distinct, comparable checkpoints."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "mps", "cuda"],
+        help="Compute device. 'auto' picks mps/cuda/cpu."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+    if args.device == "auto":
+        device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(args.device)
     print(f"[INFO] Usando dispositivo: {device}")
 
     print("[INFO] Loading data...")
@@ -304,9 +321,9 @@ def main():
         print(f"[INFO] Conditioning on '{args.cond_col}' with {n_conditions} ages "
               f"{CANONICAL_AGES}.")
 
-    train_data, val_data = split_dataset(X, cond=cond)
+    train_data, val_data = split_dataset(X, cond=cond, seed=args.seed)
     train_loader, val_loader = create_dataloader(
-        train_data, val_data, batch_size=args.batch_size
+        train_data, val_data, batch_size=args.batch_size, seed=args.seed
     )
 
     latent_dim = args.hidden_size

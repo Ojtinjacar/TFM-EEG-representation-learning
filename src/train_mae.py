@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 
 from checkpoint_naming import mae_checkpoint_name, write_sidecar
 from models import MaskedAttentionLSTMAutoencoder
-from utils import split_dataset, create_dataloader
+from utils import split_dataset, create_dataloader, set_seed
 
 # -------------------------------------------------------------------------
 # MAE LOSS FUNCTION
@@ -353,7 +353,14 @@ def main():
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
 
     # Setup
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -377,9 +384,9 @@ def main():
     print("EEG dimensions: ", X.shape)
 
     # DataLoaders
-    train_data, val_data = split_dataset(X)
+    train_data, val_data = split_dataset(X, seed=args.seed)
     train_loader, val_loader = create_dataloader(
-        train_data, val_data, batch_size=args.batch_size
+        train_data, val_data, batch_size=args.batch_size, seed=args.seed
     )
 
     # Model

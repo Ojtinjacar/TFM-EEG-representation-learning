@@ -870,7 +870,18 @@ def ages_to_indices(ages):
     return np.array(indices, dtype=np.int64)
 
 
-def split_dataset(X, train_percentaje=0.8, cond=None):
+def set_seed(seed):
+    """Seeds the python, numpy and torch RNGs for reproducible training.
+
+    Args:
+        seed (int): Seed applied to all three generators.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def split_dataset(X, train_percentaje=0.8, cond=None, seed=None):
     data = torch.tensor(X, dtype=torch.float32)  # (N, C, T)
 
     train_size = int(train_percentaje * X.shape[0])
@@ -886,14 +897,17 @@ def split_dataset(X, train_percentaje=0.8, cond=None):
         cond_tensor = torch.as_tensor(cond, dtype=torch.long)
         dataset = TensorDataset(data, data, cond_tensor)
 
-    return random_split(dataset, [train_size, val_size])
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    return random_split(dataset, [train_size, val_size], generator=generator)
 
 
-def create_dataloader(train_data, val_data, batch_size=128):
+def create_dataloader(train_data, val_data, batch_size=128, seed=None):
     """
     Creates train and validation dataloaders.
     """
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
+                              generator=generator)
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
 

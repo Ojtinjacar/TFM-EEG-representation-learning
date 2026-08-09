@@ -115,11 +115,11 @@ def test_legacy_refused_without_flag(tmp_path):
 
 def test_legacy_skips_absent_keys_but_checks_exclusion(tmp_path):
     ckpt = _make_checkpoint(tmp_path, {
-        "legacy": True, "exclude_subjects": ["B1"], "zone": "all",
+        "legacy": True, "exclude_subjects": ["B1"], "zone": "all", "seed": None,
     })
-    # beta is not recorded in the legacy sidecar: skipped, not fatal.
+    # beta is not recorded and seed is recorded as null: skipped, not fatal.
     assert checkpoint_is_reusable(
-        ckpt, {"exclude_subjects": ["B1"], "beta": 1.0}, allow_legacy=True
+        ckpt, {"exclude_subjects": ["B1"], "beta": 1.0, "seed": 1234}, allow_legacy=True
     )
     # A wrong exclusion is always fatal.
     assert not checkpoint_is_reusable(

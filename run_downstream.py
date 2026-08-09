@@ -131,17 +131,22 @@ VAE_FAMILY = ("VAE", "CVAE", "CVAE-SP")
 
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=0.003,
                     vae_prior="standard", vae_free_bits=0.0, cvae_cond_dim=16, vae_conditional=False,
-                    simclr_flags=None, simclr_tag="", allow_legacy=False):
+                    simclr_flags=None, simclr_tag="", allow_legacy=False, seed=42):
     simclr_flags = list(simclr_flags or [])
     if method in ["PCA", "supervised"]:
         # These methods do not require pre-training
         return None
+
+    # ExpCLR deliberately keeps one fixed seed across folds so that only the
+    # excluded subject varies between LOSO encoders.
+    eff_seed = 42 if method in EXPCLR_VARIANTS else seed
 
     exclude_sorted = sorted(str(s) for s in test_subjects)
     expected = {
         "zone": zone,
         "frequency": frequency,
         "exclude_subjects": exclude_sorted,
+        "seed": eff_seed,
     }
 
     # Determine the model filename based on the method
@@ -269,6 +274,8 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     if vae_conditional:
         command += ["--conditional", "--cond-dim", str(cvae_cond_dim)]
 
+    command += ["--seed", str(eff_seed)]
+
     print(f"  > Running pretraining command: {' '.join(command)}")
     try:
         result = subprocess.run(
@@ -387,6 +394,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
     # Dictionary to store pre-trained models
     pretrained_models = {}
+    pretrain_seed = args.base_seed + fold_idx
 
     # ========================================================================
     # PHASE 1: PRE-TRAINING (considering dependencies)
@@ -398,7 +406,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training {variant} (self-supervised)...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method="SimCLR", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
             simclr_flags=spec["flags"], simclr_tag=spec["tag"],
         )
 
@@ -407,7 +415,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training AE (self-supervised)...", flush=True)
         pretrained_models["AE"] = run_pretraining(
             method="AE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
         )
     else:
         pretrained_models["AE"] = None
@@ -417,7 +425,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training MAE (masked self-supervised)...", flush=True)
         pretrained_models["MAE"] = run_pretraining(
             method="MAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
         )
     else:
         pretrained_models["MAE"] = None
@@ -426,7 +434,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training VAE (variational self-supervised, beta={args.vae_beta})...", flush=True)
         pretrained_models["VAE"] = run_pretraining(
             method="VAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
             vae_beta=args.vae_beta, vae_prior="standard", vae_free_bits=args.vae_free_bits,
             vae_conditional=False,
         )
@@ -438,7 +446,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
               f"beta={args.vae_beta})...", flush=True)
         pretrained_models["CVAE"] = run_pretraining(
             method="CVAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
             vae_beta=args.vae_beta, vae_prior="conditional",
             vae_free_bits=args.vae_free_bits, cvae_cond_dim=args.cvae_cond_dim,
             vae_conditional=True,
@@ -451,7 +459,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
               f"beta={args.vae_beta})...", flush=True)
         pretrained_models["CVAE-SP"] = run_pretraining(
             method="CVAE-SP", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
             vae_beta=args.vae_beta, vae_prior="standard",
             vae_free_bits=args.vae_free_bits, cvae_cond_dim=args.cvae_cond_dim,
             vae_conditional=True,
@@ -464,7 +472,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
               f"tau={EXPCLR_TAU}, delta={EXPCLR_DELTA})...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method=variant, target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
         )
     for variant in EXPCLR_VARIANTS:
         pretrained_models.setdefault(variant, None)
@@ -485,7 +493,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
         pretrained_models[f"TripletLoss_{target}"] = run_pretraining(
             method="TripletLoss", target=target, zone=args.zone, frequency=args.frequency,
-            test_subjects=valid_test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
+            test_subjects=valid_test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
         )
 
     # ========================================================================
