@@ -113,22 +113,16 @@ def main(args):
             verbose=True
         )
 
-    # Amplitude normalization (selectable via --norm_mode).
-    # WARNING: per_channel z-score fixes each channel's variance to 1, which by Parseval
-    # removes absolute power and the aperiodic offset -- the markers with the strongest
-    # regional (antero-posterior) gradient of maturation. Use 'global' or 'none' to preserve
-    # inter-zone amplitude differences (e.g. for the FOOOF/APSD baseline).
     if args.norm_mode == "per_channel":
-        mean_ch = X.mean(axis=(0, 2), keepdims=True)  # shape: (1, n_channels, 1)
-        std_ch = X.std(axis=(0, 2), keepdims=True)    # shape: (1, n_channels, 1)
+        mean_ch = X.mean(axis=(0, 2), keepdims=True)
+        std_ch = X.std(axis=(0, 2), keepdims=True)
         X = (X - mean_ch) / (std_ch + 1e-12)
     elif args.norm_mode == "global":
-        # Single mean/std shared across channels -> preserves inter-channel/inter-zone scale.
         mean_g = X.mean()
         std_g = X.std()
         X = (X - mean_g) / (std_g + 1e-12)
     elif args.norm_mode == "none":
-        pass  # keep raw amplitude/offset intact
+        pass
     else:
         raise ValueError(f"Unknown norm_mode: {args.norm_mode}")
     print(f"[postprocessing] Amplitude normalization mode: {args.norm_mode}")
@@ -143,7 +137,6 @@ def main(args):
     meta_win.to_csv(os.path.join(args.output_path, "processed_metadata.csv"), index=False)  
 
 if __name__ == "__main__":
-    
     parser = argparse.ArgumentParser(
         description="Process EEG data."
     )

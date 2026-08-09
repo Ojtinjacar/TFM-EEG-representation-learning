@@ -31,23 +31,21 @@ def main(args):
     }
     INDIVIDUAL_ZONES = ["frontal", "central", "occipital", "parietal"]
     ZONES = INDIVIDUAL_ZONES + ["all"]
-    
+
     # --- Base Paths ---
     BASE_DATA_PATH = "data/raw/all_epochs_raw.npy"
     BASE_META_PATH = "data/raw/all_epochs_metadata.csv"
     CHANNELS_TXT = "data/raw/channel_names.txt"
     SOCIO_PATH = "data/raw/metadata.csv" # Assuming this is the socioeconomic file
-    
+
     MODEL_SAVE_DIR = "save/models"
     FIGURE_SAVE_DIR = "save/figures"
 
-    # Ensure output directories exist (supervised downstream relies on defaults)
     for d in (MODEL_SAVE_DIR, FIGURE_SAVE_DIR,
               os.path.join(FIGURE_SAVE_DIR, "pretrain"),
               os.path.join(FIGURE_SAVE_DIR, "prediction")):
         os.makedirs(d, exist_ok=True)
 
-    # Subject pool for the held-out test split (subject-based evaluation).
     all_subjects = sorted(pd.read_csv(BASE_META_PATH)["subject"].unique().tolist())
     TEST_K = min(args.test_k, len(all_subjects) - 1)
 
@@ -57,16 +55,12 @@ def main(args):
     print(f"=== STARTING PIPELINE FOR METHOD: {args.method} OVER {args.repetitions} REPETITIONS ===")
 
     for i in range(1, args.repetitions + 1):
-        # Repeated random subject holdout, seeded per repetition: the SAME test
-        # subjects are used across all zones/bands within a repetition (fair zone
-        # comparison), and CHANGE between repetitions (genuine replication for the ANOVA).
         rep_rng = random.Random(1000 + i)
         test_subjects = rep_rng.sample(all_subjects, k=TEST_K)
         print(f"\n========== REPETITION {i}/{args.repetitions} ==========")
         print(f"Held-out test subjects ({len(test_subjects)}): {test_subjects}")
         for zone in ZONES:
             for band_name, (l_freq, h_freq) in BANDS.items():
-                
                 run_id = f"{zone}_{band_name}"
                 print(f"\n--- Running: {run_id} ---")
 
@@ -93,7 +87,6 @@ def main(args):
                     subprocess.run(post_cmd, check=True, capture_output=True)
 
                 if args.method in ["SimCLR", "AE", "VAE", "CVAE"]:
-
                     # --- 2. Backbone Training ---
                     print(f"  [2/4] Training {args.method} model for {run_id}...")
                     if args.method == "SimCLR":
@@ -112,7 +105,6 @@ def main(args):
                             "--positives", args.positives,
                             "--neighbor_metric", args.neighbor_metric,
                             "--neighbor_index_dir", args.neighbor_index_dir,
-                            # Prevent leakage: the SSL backbone must NOT see test subjects.
                             "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
                     elif args.method == "AE":
@@ -127,7 +119,6 @@ def main(args):
                             "--save-fig-dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
                             "--epochs", str(args.num_epochs),
                             "--fold_id", f"rep{i}",
-                            # Prevent leakage: the SSL backbone must NOT see test subjects.
                             "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
                     elif args.method in ["VAE", "CVAE"]:
@@ -146,22 +137,18 @@ def main(args):
                             "--kl-anneal-epochs", str(args.kl_anneal_epochs),
                             "--free-bits", str(args.free_bits),
                         ]
-                        # CVAE = age-conditioned encoder + conditional (rich) prior, so
-                        # the "CVAE" label matches run_downstream.py. --prior governs the
-                        # plain VAE only.
                         if args.method == "CVAE":
                             train_cmd += ["--conditional", "--cond-dim", str(args.cond_dim),
                                           "--prior", "conditional"]
                         else:
                             train_cmd += ["--prior", args.prior]
-                        # Prevent leakage: the SSL backbone must NOT see test subjects.
                         train_cmd += ["--exclude_subjects", *[str(s) for s in test_subjects]]
 
                     subprocess.run(train_cmd, check=True, capture_output=True)
 
                     # --- 3. Model Search and Downstream Evaluation ---
                     print(f"  [3/4] Evaluating on downstream task for {run_id}...")
-                    
+
                     # The model name is variable, we search for it by pattern
                     model_pattern = f"{args.method}_{zone}_{band_name}*.pth"
                     backbone_model_path = find_latest_model(MODEL_SAVE_DIR, model_pattern)
@@ -186,7 +173,6 @@ def main(args):
                     ]
 
                 elif args.method == "supervised":
-
                     print(f"  [2/4] Skipping pre-training for supervised method.")
                     print(f"  [3/4] Running end-to-end supervised training for {run_id}...")
                     downstream_cmd = [
@@ -202,12 +188,12 @@ def main(args):
                     ]
                 # We run and capture the output to parse the nRMSE
                 result = subprocess.run(downstream_cmd, check=True, capture_output=True, text=True)
-                
+
                 # --- 4. Collecting Results ---
                 print(f"  [4/4] Collecting results for {run_id}...")
                 output = result.stdout
                 match = re.search(r"Test nRMSE \(Subject-Avg\)=([\d.]+)", output)
-                
+
                 if match:
                     nrmse = float(match.group(1))
                     print(f"        nRMSE found: {nrmse:.4f}")
@@ -236,7 +222,7 @@ def main(args):
     # Aggregate for CSV
     summary_df = results_df.groupby(['zone', 'frequency'])['nrmse'].agg(['mean', 'std']).reset_index()
     summary_df = summary_df.rename(columns={'mean': 'nrmse_mean', 'std': 'nrmse_std'})
-    
+
     # Save numerical results to a CSV
     csv_path = os.path.join(FIGURE_SAVE_DIR, f"agg_summary_results_{args.method}_{args.target}.csv")
     summary_df.to_csv(csv_path, index=False)
@@ -314,12 +300,11 @@ if __name__ == "__main__":
         default=100,
         help="Training epochs per supervised cell (forwarded to downstream.py)."
     )
-    # --- VAE / CVAE hyperparameters (forwarded to src/train_vae.py) ---
     parser.add_argument(
         "--beta",
         type=float,
         default=0.003,
-        help="VAE/CVAE: target KL weight in the ELBO (default 0.003, anti-collapse)."
+        help="VAE/CVAE: target KL weight in the ELBO (default 0.003)."
     )
     parser.add_argument(
         "--kl-anneal-epochs",
@@ -331,7 +316,7 @@ if __name__ == "__main__":
         "--free-bits",
         type=float,
         default=0.0,
-        help="VAE/CVAE: per-dimension KL floor (nats) to mitigate posterior collapse."
+        help="VAE/CVAE: per-dimension KL floor (nats)."
     )
     parser.add_argument(
         "--prior",

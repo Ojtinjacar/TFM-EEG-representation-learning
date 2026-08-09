@@ -1,13 +1,3 @@
-"""Tests for the E3 evaluation path.
-
-The ones that matter are the controls: that the probe is genuinely frozen and deterministic, that
-shuffling labels across subjects drives R2 to zero, and that aggregation lands on sessions rather
-than subjects. Those are the three ways this pipeline could silently produce numbers that look
-good and mean nothing.
-
-Run with:
-    conda run -n dasci-cimcyc python -m pytest tests/test_eval_expclr.py
-"""
 import os
 import sys
 
@@ -18,7 +8,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from eval_expclr import (  # noqa: E402
+from eval_expclr import (
     aggregate_to_sessions,
     bootstrap_ci,
     extract_embeddings,
@@ -27,7 +17,7 @@ from eval_expclr import (  # noqa: E402
     paired_bootstrap_difference,
     session_metrics,
 )
-from models import EnhancedAttentionLSTM  # noqa: E402
+from models import EnhancedAttentionLSTM
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +28,6 @@ def _seed():
 
 @pytest.fixture
 def windows():
-    """Synthetic window metadata: 10 subjects, up to 4 visits, 2 blocks, 5 windows each."""
     rows = []
     for s in range(10):
         for age in (6, 9, 16, 36)[: 2 + s % 3]:
@@ -48,10 +37,7 @@ def windows():
     return pd.DataFrame(rows)
 
 
-# --- Extracción de embeddings ------------------------------------------------------------
-
 def test_extraction_is_deterministic_and_leaves_encoder_frozen():
-    """Two extractions on the same weights must match bit for bit, and stats must not move."""
     model = EnhancedAttentionLSTM(input_size=250, hidden_size=32, n_channels=4, sfreq=250,
                                   lstm_hidden_size=16)
     X = np.random.randn(24, 4, 250).astype(np.float32)
@@ -76,8 +62,6 @@ def test_extraction_is_invariant_to_batch_size():
     assert np.allclose(a, b, atol=1e-5)
 
 
-# --- Probe -------------------------------------------------------------------------------
-
 def test_probe_recovers_a_linear_signal():
     rng = np.random.default_rng(0)
     X = rng.normal(size=(200, 8))
@@ -97,7 +81,7 @@ def test_probe_is_deterministic():
     assert np.array_equal(a, b)
 
 
-def StandardScalerFit(X):  # noqa: N802 - helper local al test
+def StandardScalerFit(X):
     from sklearn.preprocessing import StandardScaler
     return StandardScaler().fit_transform(X)
 
@@ -109,8 +93,6 @@ def test_probe_survives_a_single_training_group():
     assert model.predict(scaler.transform(X)).shape == (30,)
 
 
-# --- Agregación --------------------------------------------------------------------------
-
 def test_aggregation_lands_on_sessions_not_subjects(windows):
     y_true = windows.age.values.astype(float)
     y_pred = y_true + np.random.normal(0, 1, len(windows))
@@ -121,7 +103,6 @@ def test_aggregation_lands_on_sessions_not_subjects(windows):
 
 
 def test_aggregation_preserves_the_true_age_of_each_visit(windows):
-    """Averaging by subject would invent targets between visits; by session it must not."""
     y_true = windows.age.values.astype(float)
     sessions = aggregate_to_sessions(windows, y_true, y_true.copy())
     assert set(sessions.y_true.unique()) <= {6.0, 9.0, 16.0, 36.0}
@@ -130,12 +111,10 @@ def test_aggregation_preserves_the_true_age_of_each_visit(windows):
 def test_aggregation_uses_the_median_and_resists_outliers(windows):
     y_true = windows.age.values.astype(float)
     y_pred = y_true.copy()
-    y_pred[0] = 1e6  # una ventana artefactada
+    y_pred[0] = 1e6
     sessions = aggregate_to_sessions(windows, y_true, y_pred)
     assert sessions.y_pred.max() < 100, "la mediana deberia absorber el valor extremo"
 
-
-# --- Métricas ----------------------------------------------------------------------------
 
 def test_metrics_are_perfect_on_perfect_predictions(windows):
     y = windows.age.values.astype(float)
@@ -151,7 +130,6 @@ def test_r2_is_zero_when_predicting_the_mean(windows):
 
 
 def test_shuffling_labels_across_subjects_destroys_r2(windows):
-    """The identity-confounding control: with labels shuffled between subjects, R2 must collapse."""
     rng = np.random.default_rng(3)
     y = windows.age.values.astype(float)
     subj = windows.subject.values
@@ -167,8 +145,6 @@ def test_metrics_by_visit_covers_every_visit(windows):
     assert set(tab.age) == set(windows.age.unique())
     assert (tab.mae > 0).all()
 
-
-# --- Bootstrap ---------------------------------------------------------------------------
 
 def test_bootstrap_interval_brackets_the_observed_value(windows):
     rng = np.random.default_rng(4)

@@ -858,17 +858,6 @@ keep matching shapes across runs.
 
 
 def ages_to_indices(ages):
-    """Maps session ages to canonical condition indices in ``CANONICAL_AGES``.
-
-    Args:
-        ages (Iterable): Per-window session ages (numeric, may be floats).
-
-    Returns:
-        numpy.ndarray: Condition indices of dtype int64, shape (N,).
-
-    Raises:
-        ValueError: If any age is not one of ``CANONICAL_AGES``.
-    """
     lut = {age: i for i, age in enumerate(CANONICAL_AGES)}
     indices = []
     for a in ages:
@@ -882,25 +871,6 @@ def ages_to_indices(ages):
 
 
 def split_dataset(X, train_percentaje=0.8, cond=None):
-    """Converts a NumPy array to a Torch tensor and splits it into train/val.
-
-    Builds a ``TensorDataset`` whose input is also the target (reconstruction). When a
-    per-window condition is provided (e.g. session age for a CVAE), it is carried as a
-    third tensor aligned with the windows, so ``random_split`` keeps each
-    ``(x, x, cond)`` triple together despite shuffling the indices.
-
-    Args:
-        X (numpy.ndarray): Windows of shape (N, C, T).
-        train_percentaje (float): Fraction of samples assigned to the train split.
-        cond (numpy.ndarray, optional): Per-window condition indices of shape (N,).
-            When given, each dataset item becomes ``(x, x, cond)``.
-
-    Returns:
-        list[torch.utils.data.Subset]: The train and validation subsets.
-
-    Raises:
-        ValueError: If ``cond`` is provided but its length does not match ``X``.
-    """
     data = torch.tensor(X, dtype=torch.float32)  # (N, C, T)
 
     train_size = int(train_percentaje * X.shape[0])
@@ -913,7 +883,7 @@ def split_dataset(X, train_percentaje=0.8, cond=None):
             raise ValueError(
                 f"cond length ({len(cond)}) must match number of windows ({X.shape[0]})."
             )
-        cond_tensor = torch.as_tensor(cond, dtype=torch.long)  # (N,)
+        cond_tensor = torch.as_tensor(cond, dtype=torch.long)
         dataset = TensorDataset(data, data, cond_tensor)
 
     return random_split(dataset, [train_size, val_size])
@@ -990,7 +960,6 @@ def found_k_clusters(embeddings_np, filename="cluster_metrics.png"):
     plt.close(fig) 
 
 def infer_embeddings_in_batches(model, X_data, batch_size=512, device=None):
-
     model.eval()
     all_embeddings = []
 
@@ -1005,7 +974,6 @@ def infer_embeddings_in_batches(model, X_data, batch_size=512, device=None):
     return torch.cat(all_embeddings, dim=0).numpy()
 
 def plot_random_samples_by_age(meta, X, age, subject_ids, patient_id_column="subject"):
-
     """
     Selects and plots random EEG windows for subjects of a specified age.
 
@@ -1152,7 +1120,7 @@ def plot_patient_highlight(df_visualizacion, paciente_destacado, height=9, width
                         label=str(paciente),
                         color=color_map[paciente],
                         alpha=0.1, s=30)
-    
+
     plt.title(f"t-SNE Visualisation — Patient {paciente_destacado} highlighted")
     plt.xlabel("Dim 1")
     plt.ylabel("Dim 2")

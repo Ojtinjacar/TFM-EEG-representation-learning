@@ -1,24 +1,3 @@
-"""Selects Delta and the learning rate for ExpCLR the way the paper does, on our data.
-
-Nonnenmacher et al. (ICML 2022) do not hand down Delta = 1 as a constant of the method: they search
-it (App. A.2, Fig. 4) and report it as "a good compromise over all datasets and algorithms" (p. 6),
-and they optimise the learning rate per dataset over an eight-value grid (App. B.3, Tab. 9). Copying
-their numbers without repeating their search is what would be unfaithful, because Delta only works
-when it matches the scale of the descriptor similarities.
-
-Why that matters here concretely: the mean-normalisation adopted from Kim et al. (2021) forces every
-row mean of D_ij to equal 1 by construction, while the target (1 - s_ij) * Delta has row mean
-E[1 - s_ij] * Delta. With P_diverso, E[1 - s_ij] is about 0.54, so Delta = 1 leaves a constant
-mismatch that no encoder can remove and the objective converges to the equidistant geometry, the
-least informative one available.
-
-Following the paper (p. 6), hyperparameters are chosen on a held-out split of subjects and never
-inside the LOSO loop used for the final comparison.
-
-Usage:
-    python tune_expclr.py --epochs 30
-    python tune_expclr.py --epochs 30 --quick   # only the Delta axis, at the paper's lr
-"""
 from __future__ import annotations
 
 import argparse
@@ -35,80 +14,40 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from eval_expclr import (  # noqa: E402
+from eval_expclr import (
     aggregate_to_sessions, extract_embeddings, fit_probe, session_metrics,
 )
-from loss import ExpCLRLoss  # noqa: E402
-from models import EnhancedAttentionLSTM  # noqa: E402
-from train_expclr import (  # noqa: E402
+from loss import ExpCLRLoss
+from models import EnhancedAttentionLSTM
+from train_expclr import (
     checkpoint_is_reusable, effective_dimensionality, max_pairwise_distance, prepare_descriptor,
 )
 
 DATA = Path("data/processed/all_all")
 OUT = Path("save/e3_tuning")
 
-#: Default descriptor. Delta only works when it matches the scale of the descriptor similarities,
-#: so every descriptor needs its own search: the same value is not transferable between them.
 DEFAULT_DESCRIPTOR = "P_diverso"
 
 
 def features_path(descriptor):
-    """Builds the path of a descriptor's aligned expert-feature matrix.
-
-    Args:
-        descriptor: Descriptor label, e.g. "P_full".
-
-    Returns:
-        Path to the corresponding ``.npy`` produced by build_expert_features.py.
-    """
     return Path("data/processed/expert_features") / f"expert_features_{descriptor}.npy"
 
 
 FEATURES = features_path(DEFAULT_DESCRIPTOR)
 
-#: Delta grid of the paper (App. A.2), plus the value predicted by the bias/variance decomposition.
-#: The predicted one is our addition and is reported as such.
 DELTA_GRID = [0.1, 0.5, 1.0, 2.0, 5.0]
 
-#: Learning-rate grid of the paper (App. B.3): "lr in {5e-5, 1e-4, 5e-4, 1e-3, 3e-3, 5e-3, 7e-3, 1e-2}".
 LR_GRID = [5e-5, 1e-4, 5e-4, 1e-3, 3e-3, 5e-3, 7e-3, 1e-2]
 
-#: The rate the paper selects for ExpCLR on the two EEG-like datasets, SleepEDF and Waveform
-#: (Tab. 9). Used as the fixed rate while the Delta axis is explored.
 PAPER_LR = 5e-3
 
-#: Temperatures of the hard-negative-mining ablation (Fig. 2, right panel). Restricted to the lower
-#: half of the paper's grid because that is where the authors themselves report a gain: "other
-#: tau < 1.0 could improve the performance slightly" (App. B.4), and their figure shows accuracy
-#: decreasing monotonically from tau = 0.5 to tau = 100. Smaller tau concentrates the gradient on
-#: the worst-fitting pairs; with batches of 64 drawn from highly correlated subjects its effect need
-#: not match the paper's.
 TAU_GRID = [0.5, 0.7, 1.0, 2.0]
 
-#: Fraction of subjects held out to score configurations, matching the paper's 80/20 split (p. 6).
 VALIDATION_FRACTION = 0.2
 
 
 def suggest_delta(features: np.ndarray, subjects: np.ndarray, holdout: set[str],
                   sim_max: str = "train") -> float:
-    """Derives the Delta that removes the irreducible bias of the objective.
-
-    The normalisation pins each row mean of ``D_ij`` at 1, so the target's row mean must also be 1
-    for the loss to be about the shape of the geometry rather than a constant offset. That gives
-    ``Delta* = 1 / E[1 - s_ij]``, computed on the training subjects only.
-
-    The estimate depends on ``sim_max`` because a dataset-wide maximum makes ``s_ij`` much larger
-    than a per-batch one, and therefore the target much smaller.
-
-    Args:
-        features: Raw descriptor matrix, one row per window.
-        subjects: Subject identifier per window.
-        holdout: Subjects excluded from the estimate.
-        sim_max: Either "train" (dataset-wide maximum) or "batch".
-
-    Returns:
-        The suggested Delta.
-    """
     train_mask = ~np.isin(subjects, list(holdout))
     prepared, _ = prepare_descriptor(features[train_mask])
     max_dist = max_pairwise_distance(prepared) if sim_max == "train" else None
@@ -124,15 +63,6 @@ def suggest_delta(features: np.ndarray, subjects: np.ndarray, holdout: set[str],
 
 
 def split_subjects(subjects: np.ndarray, seed: int = 42) -> tuple[list[str], list[str]]:
-    """Splits subjects 80/20, as the paper does for hyperparameter selection.
-
-    Args:
-        subjects: Subject identifier per window.
-        seed: Seed for the split.
-
-    Returns:
-        The training and validation subject lists.
-    """
     unique = np.array(sorted(set(subjects)))
     rng = np.random.default_rng(seed)
     shuffled = rng.permutation(unique)
@@ -142,22 +72,6 @@ def split_subjects(subjects: np.ndarray, seed: int = 42) -> tuple[list[str], lis
 
 def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[str],
               seed: int, tau: float = 1.0, descriptor: str = DEFAULT_DESCRIPTOR) -> Path | None:
-    """Pre-trains one configuration, excluding the validation subjects.
-
-    Args:
-        delta: Margin under test.
-        lr: Learning rate under test.
-        sim_max: Whether ``max_kl`` is taken over the training split or per batch.
-        epochs: Training epochs.
-        holdout: Validation subjects, excluded from pre-training.
-        seed: Seed for reproducibility.
-        tau: Hard-negative-mining temperature under test.
-        descriptor: Expert descriptor to search over. It is part of the checkpoint name, so
-            searches for different descriptors never reuse each other's checkpoints.
-
-    Returns:
-        Checkpoint path, or None if training failed.
-    """
     fold_id = f"tune_d{delta}_lr{lr}_t{tau}_{sim_max}_e{epochs}_s{seed}"
     ckpt = Path("save/models") / (
         f"ExpCLR_all_all_{fold_id}_{descriptor}_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
@@ -182,24 +96,7 @@ def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[
 
 
 def score(ckpt: Path | None, X, meta, y, groups, val_mask, device, random_seed: int = 42) -> dict:
-    """Scores a checkpoint on the held-out subjects with the same probe used in the final run.
-
-    Args:
-        ckpt: Checkpoint to score, or None for a randomly initialised encoder.
-        X: Windows.
-        meta: Window metadata.
-        y: Target per window.
-        groups: Subject per window.
-        val_mask: Boolean mask selecting the validation windows.
-        device: Torch device.
-
-    Returns:
-        Dict with session-level metrics and the effective dimensionality.
-    """
     if ckpt is None:
-        # Same seed as B2 in run_e3_loso.py: the reference against which the method is declared to
-        # fail must be the very encoder that appears in the final table. Across seeds the random
-        # baseline moves by sd = 0.024 in R2, comparable to the effects being chased.
         torch.manual_seed(random_seed)
     model = EnhancedAttentionLSTM(input_size=X.shape[2], hidden_size=128, n_channels=X.shape[1],
                                   sfreq=250, lstm_hidden_size=64, dropout=0.0).to(device)
@@ -262,11 +159,6 @@ def main() -> None:
     rows = []
 
     def evaluate(delta, lr, sim_max, stage, index, total, tau=1.0):
-        """Trains and scores one configuration, recording it in `rows`.
-
-        Configurations whose metric is not finite are dropped rather than recorded: a diverged run
-        would otherwise be picked as the winner by a comparison against NaN.
-        """
         t0 = time.time()
         ckpt = train_one(delta, lr, sim_max, args.epochs, val_subjects, args.seed, tau,
                          descriptor=args.descriptor)
@@ -285,8 +177,6 @@ def main() -> None:
               f"dim={result['effective_dim']:5.2f} ({time.time() - t0:.0f}s)", flush=True)
         return result
 
-    # Etapa 1: Delta y sim_max al learning rate del paper. Delta es el eje que domina el problema,
-    # y sim_max cambia la escala de las similitudes, así que se exploran juntos.
     stage1 = [(d, sm) for sm in ("train", "batch")
               for d in sorted(set(DELTA_GRID + [round(suggested[sm], 2)]))]
     print(f"Etapa 1: {len(stage1)} configuraciones de (Delta, sim_max) a lr={PAPER_LR}")
@@ -296,13 +186,10 @@ def main() -> None:
     if not rows:
         raise RuntimeError("ninguna configuracion completo el entrenamiento")
 
-    # Selección por MAE, la métrica primaria declarada en eval_expclr.py y la del contraste
-    # pre-registrado. Con un target de cuatro niveles el R2 lo domina la visita de 36 meses.
     best1 = min(rows, key=lambda r: r["mae"])
     print(f"\nMejor de la etapa 1: delta={best1['delta']}, sim_max={best1['sim_max']}, "
           f"MAE={best1['mae']:.2f}")
 
-    # Etapa 2: learning rate sobre la rejilla del paper, con el (Delta, sim_max) ganador.
     if not args.quick:
         lrs = [lr for lr in LR_GRID if lr != PAPER_LR]
         print(f"\nEtapa 2: {len(lrs)} learning rates con delta={best1['delta']}, "
@@ -310,8 +197,6 @@ def main() -> None:
         for i, lr in enumerate(lrs, 1):
             evaluate(best1["delta"], lr, best1["sim_max"], "2", i, len(lrs))
 
-        # Etapa 3: temperatura. El paper declara que su propio tau=1 no es optimo ("other tau < 1.0
-        # could improve the performance slightly", App. B.4) y su Fig. 2 lo confirma.
         best2 = min(rows, key=lambda r: r["mae"])
         taus = [t for t in TAU_GRID if t != 1.0]
         print(f"\nEtapa 3: {len(taus)} temperaturas con delta={best2['delta']}, "

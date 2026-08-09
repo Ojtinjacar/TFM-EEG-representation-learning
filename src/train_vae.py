@@ -16,20 +16,7 @@ from utils import split_dataset, create_dataloader, ages_to_indices, CANONICAL_A
 from loss import build_prior, vae_elbo, kl_beta
 
 
-# -------------------------------------------------------------------------
-# TRAINING
-# -------------------------------------------------------------------------
 def _unpack_batch(batch, device):
-    """Unpacks a dataloader batch, tolerating the optional condition tensor.
-
-    Args:
-        batch (Sequence[torch.Tensor]): Either ``(x, x)`` or ``(x, x, cond)``.
-        device (torch.device): Target device.
-
-    Returns:
-        tuple[torch.Tensor, torch.Tensor | None]: Input batch on ``device`` and the
-        condition indices on ``device`` (or None when absent).
-    """
     x_batch = batch[0].to(device)
     cond = batch[2].to(device) if len(batch) == 3 else None
     return x_batch, cond
@@ -52,28 +39,6 @@ def fit_model(
     save_fig_dir=None,
     max_lr=1e-3,
 ):
-    """Trains the VAE/CVAE with OneCycleLR and saves the loss curve and model weights.
-
-    Args:
-        epochs (int): Number of training epochs.
-        train_loader (DataLoader): Training loader yielding (x, x[, cond]) tuples.
-        val_loader (DataLoader): Validation loader yielding (x, x[, cond]) tuples.
-        model (nn.Module): The VAE or CVAE model.
-        optimizer (torch.optim.Optimizer): Optimizer.
-        device (torch.device): Compute device.
-        target_beta (float): Final KL weight.
-        anneal_epochs (int): KL warm-up length in epochs.
-        prior (LatentPrior): Latent prior strategy providing the KL term.
-        conditional (bool): Whether the model and loader are condition-aware (CVAE).
-        free_bits (float): Per-dimension KL floor to mitigate posterior collapse.
-        model_name (str): Base name for saved artifacts.
-        save_model_dir (str): Directory to save the .pth (skipped if None).
-        save_fig_dir (str): Directory to save the loss figure (skipped if None).
-        max_lr (float): Maximum learning rate for OneCycleLR.
-
-    Returns:
-        nn.Module: The trained model.
-    """
     steps_per_epoch = len(train_loader)
     scheduler = OneCycleLR(
         optimizer,
@@ -140,7 +105,6 @@ def fit_model(
               f"- Train Loss = {train_loss:.6f} (recon = {train_recon:.6f}, "
               f"KL = {train_kl:.6f}, beta = {beta:.4f}), Val Loss = {val_loss:.6f}")
 
-    # Save loss figure
     if save_fig_dir:
         os.makedirs(save_fig_dir, exist_ok=True)
         plt.figure(figsize=(10, 5))
@@ -157,7 +121,6 @@ def fit_model(
         plt.close()
         print(f"[INFO] Loss figure saved to: {fig_path}")
 
-    # Save model
     if save_model_dir:
         os.makedirs(save_model_dir, exist_ok=True)
         model_path = os.path.join(save_model_dir, f"{model_name}.pth")
@@ -167,13 +130,9 @@ def fit_model(
     return model
 
 
-# -------------------------------------------------------------------------
-# MAIN PIPELINE
-# -------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Variational Autoencoder (VAE) training.")
 
-    # Data paths
     parser.add_argument(
         "--data-path",
         type=str,
@@ -187,7 +146,6 @@ def main():
         help="Path to the metadata CSV.",
     )
 
-    # Output paths
     parser.add_argument(
         "--save-model-dir",
         type=str,
@@ -201,7 +159,6 @@ def main():
         help="Directory to save figures.",
     )
 
-    # Model and training parameters
     parser.add_argument(
         "--hidden-size",
         type=int,
@@ -242,9 +199,7 @@ def main():
         "--beta",
         type=float,
         default=0.003,
-        help="Target weight of the KL term in the ELBO. Calibrated on the all_all config: "
-             "beta>=0.03 collapses the KL, beta=0.003 keeps it active (KL~1.6) with good "
-             "reconstruction. Provisional until confirmed on downstream."
+        help="Target weight of the KL term in the ELBO."
     )
     parser.add_argument(
         "--kl-anneal-epochs",
@@ -280,7 +235,7 @@ def main():
         "--free-bits",
         type=float,
         default=0.0,
-        help="Per-dimension KL floor (nats) to mitigate posterior collapse. 0 disables it."
+        help="Per-dimension KL floor (nats). 0 disables it."
     )
     parser.add_argument(
         "--conditional",
@@ -317,16 +272,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Usando dispositivo: {device}")
 
-    # Load data
     print("[INFO] Loading data...")
     X_np = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path)  # Load metadata to filter subjects
+    meta_df = pd.read_csv(args.meta_path)
 
-    # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
         print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
         keep_mask = ~meta_df['subject'].isin(args.exclude_subjects)
@@ -338,9 +290,6 @@ def main():
     X = torch.tensor(X_np, dtype=torch.float32)
     print("EEG dimensions: ", X.shape)
 
-    # --- Condition (session age) for the CVAE and/or conditional prior ---
-    # Load it whenever the encoder is conditioned OR the prior is conditional; both
-    # need the per-window age aligned with X (before the shuffled split).
     needs_cond = args.conditional or args.prior == "conditional"
     cond = None
     n_conditions = len(CANONICAL_AGES)
@@ -350,21 +299,18 @@ def main():
                 f"Condition column '{args.cond_col}' not found in metadata "
                 f"({args.meta_path}). Available: {list(meta_df.columns)}"
             )
-        cond = ages_to_indices(meta_df[args.cond_col].values)  # aligned with X rows
+        cond = ages_to_indices(meta_df[args.cond_col].values)
         print(f"[INFO] Conditioning on '{args.cond_col}' with {n_conditions} ages "
               f"{CANONICAL_AGES}.")
 
-    # DataLoaders (carry the condition when needed)
     train_data, val_data = split_dataset(X, cond=cond)
     train_loader, val_loader = create_dataloader(
         train_data, val_data, batch_size=args.batch_size
     )
 
-    # Prior strategy (Strategy pattern; injected into the model)
     latent_dim = args.hidden_size
     prior = build_prior(args.prior, n_conditions=n_conditions, latent_dim=latent_dim).to(device)
 
-    # Model (plain VAE or conditional VAE)
     print(f"[INFO] Creating the {'CVAE' if args.conditional else 'VAE'} model "
           f"(prior={args.prior}, free_bits={args.free_bits})...")
     if args.conditional:
@@ -388,7 +334,6 @@ def main():
             prior=prior,
         ).to(device)
 
-    # Training (optimizer covers model params, incl. a learnable prior submodule)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     fold_suffix = f"_{args.fold_id}" if args.fold_id else ""

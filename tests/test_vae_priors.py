@@ -1,12 +1,3 @@
-"""Fast, data-free unit tests for the VAE/CVAE latent priors and models.
-
-Covers the pluggable latent priors (standard and conditional), the ELBO with free
-bits, the plain VAE and the conditional VAE (forward, embedding, checkpoint
-round-trip), and the age-condition helpers. No EEG data or trained weights required.
-
-Run with:
-    conda run -n dasci-cimcyc python -m pytest tests/test_vae_priors.py
-"""
 import os
 import sys
 
@@ -16,20 +7,19 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from loss import (  # noqa: E402
+from loss import (
     StandardNormalPrior,
     ConditionalGaussianPrior,
     build_prior,
     vae_elbo,
     kl_beta,
 )
-from models import (  # noqa: E402
+from models import (
     VariationalAttentionLSTMAutoencoder,
     ConditionalVariationalAttentionLSTMAutoencoder,
 )
-from utils import split_dataset, ages_to_indices, CANONICAL_AGES  # noqa: E402
+from utils import split_dataset, ages_to_indices, CANONICAL_AGES
 
-# The mirror decoder hardcodes upsampling to 1250 samples (5 s @ 250 Hz).
 B, C, T = 8, 4, 1250
 H = 32
 N_COND = len(CANONICAL_AGES)
@@ -48,7 +38,6 @@ def posterior():
     return mu, logvar
 
 
-# --- Priors --------------------------------------------------------------------
 def test_standard_prior_kl_is_nonnegative_scalar(posterior):
     mu, logvar = posterior
     kl = StandardNormalPrior().kl_divergence(mu, logvar)
@@ -86,10 +75,9 @@ def test_build_prior_factory():
 def test_kl_beta_annealing():
     assert kl_beta(0, 0.1, 10) == pytest.approx(0.01)
     assert kl_beta(100, 0.1, 10) == 0.1
-    assert kl_beta(5, 0.1, 0) == 0.1  # 0 disables annealing
+    assert kl_beta(5, 0.1, 0) == 0.1
 
 
-# --- Plain VAE -----------------------------------------------------------------
 def test_vae_forward_and_elbo_backward():
     x = torch.randn(B, C, T)
     vae = VariationalAttentionLSTMAutoencoder(input_size=T, hidden_size=H, n_channels=C,
@@ -108,7 +96,6 @@ def test_vae_state_dict_has_no_prior_keys():
     assert not any(k.startswith("prior.") for k in vae.state_dict())
 
 
-# --- Conditional VAE -----------------------------------------------------------
 def _make_cvae():
     return ConditionalVariationalAttentionLSTMAutoencoder(
         input_size=T, hidden_size=H, n_conditions=N_COND, n_channels=C, sfreq=250,
@@ -124,8 +111,8 @@ def test_cvae_forward_and_embedding():
     loss, _, _ = vae_elbo(recon, x, mu, logvar, cvae.prior, beta=0.1, cond=cond)
     loss.backward()
     assert torch.isfinite(loss)
-    assert cvae.get_embedding(x).shape == (B, H)         # neutral condition
-    assert cvae.get_embedding(x, cond).shape == (B, H)   # explicit condition
+    assert cvae.get_embedding(x).shape == (B, H)
+    assert cvae.get_embedding(x, cond).shape == (B, H)
 
 
 def test_cvae_state_dict_has_prior_and_cond_keys():
@@ -147,7 +134,6 @@ def test_cvae_checkpoint_round_trip(tmp_path):
     assert rebuilt.get_embedding(x).shape == (B, H)
 
 
-# --- Age-condition helpers -----------------------------------------------------
 def test_ages_to_indices_maps_and_rejects():
     idx = ages_to_indices([6, 9, 16, 36, 6])
     assert idx.min() == 0 and idx.max() == N_COND - 1
@@ -159,6 +145,6 @@ def test_split_dataset_carries_condition():
     X = np.random.randn(16, C, T).astype(np.float32)
     cond = ages_to_indices(list(CANONICAL_AGES) * 4)
     train, _ = split_dataset(X, cond=cond)
-    assert len(train[0]) == 3  # (x, x, cond)
+    assert len(train[0]) == 3
     with pytest.raises(ValueError):
-        split_dataset(X, cond=cond[:4])  # length mismatch
+        split_dataset(X, cond=cond[:4])

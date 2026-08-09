@@ -1,21 +1,3 @@
-"""Pre-train the EEG encoder with ExpCLR (Nonnenmacher et al., ICML 2022).
-
-ExpCLR replaces augmentation-based views with a continuous expert descriptor: the loss asks the
-embedding geometry to reproduce the geometry of the expert features (properties P1/P2 of the
-paper, Sec. 3.2). Consequently this script differs structurally from ``train_simclr.py``: a batch
-carries a single, un-augmented view per window plus its expert feature vector, and the objective
-is computed over the full NxN pairwise matrix.
-
-The descriptor is the 106 curated expert features of E3, precomputed and aligned to the window
-order by ``code/src/build_expert_features.py``.
-
-Usage:
-    python src/train_expclr.py \
-        --data_path data/processed/all_all \
-        --expert_features data/processed/expert_features/expert_features_P_full.npy \
-        --zone all --frequency all --fold_id fold0 \
-        --exclude_subjects B010 B011
-"""
 
 import argparse
 import json
@@ -34,22 +16,7 @@ from models import EnhancedAttentionLSTM
 
 
 class ExpertFeatureDataset(Dataset):
-    """Pairs each EEG window with its expert feature vector.
-
-    ExpCLR needs ``f_i`` for every sample in the batch, so windows without a descriptor are
-    dropped at construction time rather than imputed wholesale.
-    """
-
     def __init__(self, X, F):
-        """Initialises the dataset.
-
-        Args:
-            X: Window tensor of shape (N, C, T).
-            F: Expert feature tensor of shape (N, d), already imputed and standardised.
-
-        Raises:
-            ValueError: If the two tensors disagree on the number of windows.
-        """
         if len(X) != len(F):
             raise ValueError(f"Windows ({len(X)}) and expert features ({len(F)}) are not aligned")
         self.X = X
@@ -63,25 +30,6 @@ class ExpertFeatureDataset(Dataset):
 
 
 def prepare_descriptor(features, *, quality=None, min_r2=None):
-    """Imputes, standardises and validates the expert descriptor on the training split.
-
-    The paper does not specify any normalisation of the expert features, but it is mandatory here:
-    our 106 features span scales from 1e-11 (band powers) to 10 (aperiodic offset), so without a
-    per-feature z-score two or three columns would dominate the Euclidean distance that defines
-    ``s_ij``. Statistics are fitted on the given rows only, which under LOSO are train-only.
-
-    Args:
-        features: Raw descriptor matrix of shape (N, d), possibly containing NaN.
-        quality: Optional per-window specparam R^2 used to drop poorly fitted windows.
-        min_r2: Optional threshold applied to ``quality``.
-
-    Returns:
-        Tuple ``(F, keep)`` where ``F`` is the standardised (M, d) matrix and ``keep`` is the
-        boolean vector of rows retained from the input.
-
-    Raises:
-        ValueError: If no window survives, or if every value of some feature is NaN.
-    """
     keep = ~np.isnan(features).all(axis=1)
     if quality is not None and min_r2 is not None:
         keep &= np.nan_to_num(quality, nan=-np.inf) >= min_r2
@@ -90,7 +38,6 @@ def prepare_descriptor(features, *, quality=None, min_r2=None):
 
     F = features[keep].astype(np.float64)
 
-    # Checked before nanmedian: an all-NaN column would only yield a NaN median and a warning.
     all_nan = np.isnan(F).all(axis=0)
     if all_nan.any():
         raise ValueError(f"{int(all_nan.sum())} descriptor columns are entirely NaN on this split")
@@ -99,7 +46,6 @@ def prepare_descriptor(features, *, quality=None, min_r2=None):
 
     mean = F.mean(axis=0)
     std = F.std(axis=0)
-    # Constant columns carry no similarity information; neutralise them instead of dividing by 0.
     constant = std < 1e-12
     if constant.any():
         print(f"  > {int(constant.sum())} constant descriptor columns zeroed out")
@@ -111,24 +57,6 @@ def prepare_descriptor(features, *, quality=None, min_r2=None):
 
 
 def checkpoint_is_reusable(checkpoint_path, expected):
-    """Decides whether an existing checkpoint was trained under the requested settings.
-
-    Reuse used to be decided by file name alone, which silently returned encoders trained under a
-    different objective whenever a setting was absent from the name: the switch from
-    ``--loss_on projection`` to ``embedding`` became a no-op because 45 checkpoints already existed
-    at the expected paths. Comparing against the sidecar closes that class of bug for every
-    setting, including ones added later.
-
-    A checkpoint with no sidecar is treated as not reusable: it predates this check and its
-    provenance is unknown.
-
-    Args:
-        checkpoint_path: Path of the ``.pth`` under consideration.
-        expected: Mapping of sidecar keys to the values the caller requires.
-
-    Returns:
-        True if the checkpoint exists and every requested key matches.
-    """
     checkpoint_path = str(checkpoint_path)
     if not os.path.exists(checkpoint_path):
         return False
@@ -149,22 +77,6 @@ def checkpoint_is_reusable(checkpoint_path, expected):
 
 
 def effective_dimensionality(z):
-    """Measures how many directions a representation actually uses.
-
-    Computed as ``exp(H)`` over the normalised PCA eigenvalues, so a cloud spread evenly over k
-    directions scores k and one collapsed onto a single axis scores 1. This is the diagnostic that
-    exposes a contracting encoder: the ExpCLR loss can fall steadily while the representation
-    collapses onto two or three directions, in which case a falling loss looks like convergence and
-    is in fact damage. Tracking it alongside the loss is what makes that visible during training.
-
-    Args:
-        z: Representation matrix of shape (n_samples, n_features).
-
-    Returns:
-        Effective dimensionality as a float, between 1 and n_features.
-    """
-    # A diverged encoder produces NaN or inf, on which np.linalg.svd raises and would otherwise
-    # abort a whole hyperparameter sweep instead of just discarding that configuration.
     if not np.isfinite(z).all():
         return float("nan")
     centred = z - z.mean(axis=0, keepdims=True)
@@ -178,23 +90,6 @@ def effective_dimensionality(z):
 
 
 def equidistant_reference(n, device):
-    """Builds the distance matrix of a perfectly equidistant cloud, as ``mu_i`` normalises it.
-
-    Not a matrix of ones. Let every off-diagonal raw distance equal some c. Since ``mu_i`` averages
-    over all N entries of row i including ``dist_ii = 0``, we get ``mu_i = c(N-1)/N`` and therefore
-    ``D_ij = c / mu_i = N/(N-1)``, independent of c. A matrix of ones instead has row mean
-    ``(N-1)/N``, which no normalised distance matrix can have, so it understated the reference
-    floor -- by how much depends on the descriptor, but the entries differ by ``1/(N-1)``, i.e.
-    1.6 % at N=64, and the effect on the floor is larger. This matters precisely in the regime
-    where the warning has to fire.
-
-    Args:
-        n: Batch size.
-        device: Torch device.
-
-    Returns:
-        Matrix of shape (n, n), zero on the diagonal and ``n/(n-1)`` elsewhere.
-    """
     ref = torch.full((n, n), n / (n - 1.0), device=device)
     ref.fill_diagonal_(0.0)
     return ref
@@ -202,30 +97,6 @@ def equidistant_reference(n, device):
 
 @torch.no_grad()
 def diagnose_epoch(model, batches, criterion, device, loss_on):
-    """Measures the geometry of the representation after a training epoch.
-
-    Reports the effective dimensionality and the loss of the *equidistant* geometry, the degenerate
-    optimum the objective falls into when ``Delta`` does not match the scale of the descriptor
-    similarities. A training loss approaching that reference means the encoder is learning to place
-    every pair at the same distance, i.e. the least informative geometry available, rather than
-    reproducing the expert geometry.
-
-    Takes pre-drawn batches rather than a DataLoader on purpose. Iterating a shuffling loader draws
-    a fresh permutation from its generator even if the loop breaks early, which made
-    ``--diagnose_every`` silently change the batch order of training and therefore the final
-    weights: an observation-only flag acting as a hyperparameter. Fixed batches also make the
-    estimate comparable across epochs instead of resampling noise.
-
-    Args:
-        model: Encoder under training.
-        batches: Fixed list of (windows, features) tensors to measure on.
-        criterion: The ExpCLR loss, used to recompute the reference on the same batches.
-        device: Torch device.
-        loss_on: Either "projection" or "embedding", matching the training objective.
-
-    Returns:
-        Dict with ``effective_dim`` and ``equidistant_loss``.
-    """
     was_training = model.training
     model.eval()
     reps, references = [], []
@@ -234,8 +105,6 @@ def diagnose_epoch(model, batches, criterion, device, loss_on):
         z = model(x_batch) if loss_on == "projection" else model.get_embedding(x_batch)
         reps.append(z.cpu().numpy())
         target = (1.0 - criterion.expert_similarity(f_batch)) * criterion.delta
-        # Scored with the loss actually being optimised, so the two are comparable. Using the mean
-        # (Eq. 3) against a log-sum-exp training loss (Eq. 4) made the warning unfirable by Jensen.
         references.append(float(criterion.reduce(
             (target - equidistant_reference(len(target), target.device)).pow(2))))
     if was_training:
@@ -247,34 +116,12 @@ def diagnose_epoch(model, batches, criterion, device, loss_on):
 
 
 def set_seed(seed):
-    """Seeds every source of randomness that affects the trained encoder.
-
-    Without this the encoder's initialisation and the batch order depend on torch's global state,
-    so two runs of the same fold produce different weights and a small difference between methods
-    could be attributed to the initialisation rather than to the method.
-
-    ``torch.manual_seed`` covers the CPU and the accelerator (CUDA and MPS) generators. The
-    DataLoader needs its own explicit generator, which :func:`main` passes in.
-
-    Args:
-        seed: Seed applied to ``random``, ``numpy`` and ``torch``.
-    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
 
 def max_pairwise_distance(F, *, max_samples=4096, seed=42):
-    """Computes ``max_kl ||f_k - f_l||`` over the training descriptor.
-
-    Args:
-        F: Standardised descriptor of shape (M, d).
-        max_samples: Cap on the number of rows used, to bound the MxM distance matrix.
-        seed: Seed for the subsample when the cap applies.
-
-    Returns:
-        The maximum pairwise Euclidean distance as a float.
-    """
     if len(F) > max_samples:
         rng = np.random.default_rng(seed)
         idx = rng.choice(len(F), size=max_samples, replace=False)
@@ -284,10 +131,6 @@ def max_pairwise_distance(F, *, max_samples=4096, seed=42):
         return float(torch.cdist(t, t, p=2).max().item())
 
 
-#: Smallest batch whose backward pass works on MPS. ``torch.cdist``, which the ExpCLR loss uses for
-#: both the descriptor and the embedding distances, switches to a matmul implementation once the
-#: input has more than 25 rows. Only that path has a backward on MPS; the direct kernel raises
-#: NotImplementedError for ``aten::_cdist_backward``. The paper's batch size of 64 is safely above.
 MIN_BATCH_SIZE_ON_MPS = 26
 
 
@@ -323,7 +166,6 @@ def main(args):
         )
     print(f"Windows: {X_np.shape}, expert descriptor: {features.shape}")
 
-    # --- Exclude the test subjects of this fold (same convention as train_simclr.py) ---
     if args.exclude_subjects:
         keep_mask = ~meta_df["subject"].isin(args.exclude_subjects)
         print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
@@ -333,7 +175,6 @@ def main(args):
             quality = quality[keep_mask.values]
         print(f"Number of windows for pre-training after exclusion: {len(X_np)}")
 
-    # --- Descriptor preparation, fitted on this fold's training windows only ---
     F_np, keep = prepare_descriptor(features, quality=quality, min_r2=args.min_apsd_r2)
     dropped = int((~keep).sum())
     if dropped:
@@ -347,7 +188,6 @@ def main(args):
         feat_max_dist = max_pairwise_distance(F_np)
         print(f"max_kl ||f_k - f_l|| over train: {feat_max_dist:.4f}")
 
-    # Seeded before the loader and the model, the two consumers of torch's global RNG.
     set_seed(args.seed)
     dataset = ExpertFeatureDataset(X, F)
     train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
@@ -362,7 +202,6 @@ def main(args):
         dropout=args.dropout,
     ).to(device)
 
-    # Adam with exponential decay, as specified in the paper (Sec. 4.2), not the repo's AdamW.
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
     scheduler = ExponentialLR(optimizer, gamma=args.lr_gamma)
     criterion = ExpCLRLoss(
@@ -373,8 +212,6 @@ def main(args):
         squared_similarity=not args.linear_similarity,
     )
 
-    # Fixed batches, drawn once from a generator of their own so the training loader's RNG is
-    # untouched and the measurements stay comparable across epochs.
     diag_rng = torch.Generator().manual_seed(args.seed + 1)
     diag_idx = torch.randperm(len(dataset), generator=diag_rng)[:8 * args.batch_size]
     diag_batches = [(X[diag_idx[i:i + args.batch_size]], F[diag_idx[i:i + args.batch_size]])
@@ -402,8 +239,6 @@ def main(args):
         scheduler.step()
         epoch_loss = total_loss / len(train_loader)
         losses.append(epoch_loss)
-        # Diagnosed every few epochs: a falling loss with a falling effective dimensionality is
-        # contraction, not convergence.
         if epoch % args.diagnose_every == 0 or epoch == args.num_epochs - 1:
             diag = diagnose_epoch(model, diag_batches, criterion, device, args.loss_on)
             diagnostics.append(diag)
@@ -440,9 +275,6 @@ def main(args):
                 "descriptor_dim": int(F.shape[1]),
                 "n_windows": int(len(X)),
                 "feat_max_dist": feat_max_dist,
-                # Everything a caller must match before reusing this checkpoint. Reuse is decided by
-                # comparing against these, not by the file name: a setting missing from the name
-                # would otherwise be silently inherited from a previous run.
                 "delta": args.delta,
                 "temperature": None if args.no_hard_negative_mining else args.temperature,
                 "loss_on": args.loss_on,
@@ -501,7 +333,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=5e-3,
                         help="Learning rate. The paper's grid picks 5e-3 for EEG (Table 9).")
     parser.add_argument("--lr_gamma", type=float, default=0.99,
-                        help="Exponential LR decay, as in the paper (Sec. 4.2).")
+                        help="Exponential LR decay.")
     parser.add_argument("--num_epochs", type=int, default=100, help="Training epochs.")
     parser.add_argument("--delta", type=float, default=1.0, help="Margin Delta of Eq. 3/4.")
     parser.add_argument("--temperature", type=float, default=1.0,

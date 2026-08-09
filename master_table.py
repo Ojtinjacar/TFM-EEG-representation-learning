@@ -1,4 +1,3 @@
-"""Master aggregation across all experiments -> one consistent table."""
 import glob
 import numpy as np
 import pandas as pd

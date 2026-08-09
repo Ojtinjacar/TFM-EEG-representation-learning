@@ -1,13 +1,3 @@
-"""Tests that ExpCLR pre-training is reproducible under a fixed seed.
-
-Without seeding, the encoder's initialisation and the batch order come from torch's global state,
-so two runs of the same fold give different weights and a small gap between methods could be an
-artefact of the initialisation. These tests pin that down: same seed means identical weights,
-different seed means different weights.
-
-Run with:
-    conda run -n dasci-cimcyc python -m pytest tests/test_train_reproducibility.py
-"""
 import os
 import subprocess
 import sys
@@ -20,11 +10,10 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from train_expclr import set_seed  # noqa: E402
+from train_expclr import set_seed
 
 
 def test_set_seed_makes_torch_numpy_and_random_deterministic():
-    """All three generators must be pinned, not just torch's."""
     import random
 
     set_seed(7)
@@ -43,7 +32,6 @@ def test_set_seed_gives_different_draws_for_different_seeds():
 
 
 def test_dataloader_order_is_reproducible_under_a_seeded_generator():
-    """The batch order is the second source of run-to-run variation, after the initialisation."""
     from torch.utils.data import DataLoader, TensorDataset
 
     data = TensorDataset(torch.arange(40).float().unsqueeze(1))
@@ -57,15 +45,8 @@ def test_dataloader_order_is_reproducible_under_a_seeded_generator():
     assert order(42) != order(43)
 
 
-# --- Entrenamiento completo, extremo a extremo -------------------------------------------
-
 @pytest.fixture(scope="module")
 def tiny_dataset(tmp_path_factory):
-    """Writes a miniature dataset in the layout train_expclr.py expects.
-
-    Small enough that two full training runs finish in seconds, which is what makes an end-to-end
-    reproducibility check affordable as a test.
-    """
     rng = np.random.default_rng(0)
     root = tmp_path_factory.mktemp("data")
     n = 96
@@ -82,13 +63,10 @@ def tiny_dataset(tmp_path_factory):
 
 
 def _train(tiny_dataset, seed, save_dir, fold_id, diagnose_every=5):
-    """Runs one short pre-training and returns the resulting state dict."""
     root, features = tiny_dataset
     cmd = [sys.executable, os.path.join(ROOT, "src", "train_expclr.py"),
            "--data_path", str(root), "--expert_features", str(features),
            "--descriptor", "test", "--zone", "z", "--frequency", "f",
-           # batch >= 26 keeps torch.cdist on its matmul path, the only one whose backward exists
-           # on MPS; below that the direct kernel raises NotImplementedError. See MIN_BATCH_SIZE.
            "--fold_id", fold_id, "--num_epochs", "2", "--batch_size", "32",
            "--embedding_size", "16", "--seed", str(seed),
            "--diagnose_every", str(diagnose_every),
@@ -103,7 +81,6 @@ def _train(tiny_dataset, seed, save_dir, fold_id, diagnose_every=5):
 
 
 def test_same_seed_reproduces_the_encoder_bit_for_bit(tiny_dataset, tmp_path):
-    """The guarantee the seed buys: re-running a fold gives back the same encoder."""
     a = _train(tiny_dataset, 42, tmp_path, "a")
     b = _train(tiny_dataset, 42, tmp_path, "b")
     assert a.keys() == b.keys()
@@ -112,20 +89,12 @@ def test_same_seed_reproduces_the_encoder_bit_for_bit(tiny_dataset, tmp_path):
 
 
 def test_different_seeds_produce_different_encoders(tiny_dataset, tmp_path):
-    """The control: if seeds did not matter, the test above would pass vacuously."""
     a = _train(tiny_dataset, 42, tmp_path, "a")
     b = _train(tiny_dataset, 7, tmp_path, "b")
     assert any(not torch.equal(a[k], b[k]) for k in a), "cambiar la semilla no cambio nada"
 
 
 def test_diagnostics_do_not_change_the_trained_weights(tiny_dataset, tmp_path):
-    """An observation-only flag must not be a hyperparameter.
-
-    Diagnosing used to iterate the training DataLoader, which draws a fresh permutation from its
-    generator even when the loop breaks early. That made the batch order -- and therefore the final
-    weights -- depend on --diagnose_every, so the encoder that won a hyperparameter search was not
-    the one later retrained under LOSO.
-    """
     often = _train(tiny_dataset, 42, tmp_path, "often", diagnose_every=1)
     rarely = _train(tiny_dataset, 42, tmp_path, "rarely", diagnose_every=1000)
     for key in often:

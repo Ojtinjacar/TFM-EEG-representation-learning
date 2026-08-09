@@ -15,9 +15,6 @@ from sklearn.metrics import r2_score
 LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
 FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
 
-# ExpCLR (E3) hyperparameters. They are kept here as constants because run_pretraining must
-# rebuild the checkpoint filename that src/train_expclr.py writes, character for character.
-# Values follow Nonnenmacher et al. (ICML 2022): tau = 1, Delta = 1, batch = 64, lr = 5e-3.
 EXPCLR_DESCRIPTOR = "P_full"
 EXPCLR_BATCH_SIZE = 64
 EXPCLR_LR = 0.005
@@ -25,11 +22,6 @@ EXPCLR_TAU = 1.0
 EXPCLR_DELTA = 1.0
 EXPCLR_FEATURES = "data/processed/expert_features/expert_features_P_full.npy"
 
-# ExpCLR variants, following the same registry pattern as SIMCLR_VARIANTS below: each is a
-# first-class "method" with its own pre-training and its own result rows. What varies is the
-# expert descriptor, so no extra tag is needed: src/train_expclr.py already embeds the
-# descriptor label in the checkpoint name, which keeps the variants from overwriting each other.
-# "ExpCLR" (P_full, the 106 curated features) is the reference; the others are descriptor ablations.
 EXPCLR_VARIANTS = {
     "ExpCLR":              {"descriptor": EXPCLR_DESCRIPTOR, "features": EXPCLR_FEATURES},
     "ExpCLR-diverso":      {"descriptor": "P_diverso",
@@ -40,19 +32,6 @@ EXPCLR_VARIANTS = {
 
 
 def load_expclr_tuning(config_dir):
-    """Overrides each ExpCLR variant's hyperparameters with its tuned values.
-
-    Delta only works when it matches the scale of a descriptor's similarities, so tune_expclr.py
-    searches every descriptor separately and writes one ``best_config_<descriptor>.json`` per
-    search. Variants without a config keep the paper's defaults.
-
-    Args:
-        config_dir: Directory holding the ``best_config_<descriptor>.json`` files.
-
-    Raises:
-        ValueError: If a config exists but records that no configuration beat the random encoder,
-            since pre-training on it would produce results that are not worth reporting.
-    """
     for name, variant in EXPCLR_VARIANTS.items():
         path = os.path.join(config_dir, f"best_config_{variant['descriptor']}.json")
         if not os.path.exists(path):
@@ -73,46 +52,27 @@ def load_expclr_tuning(config_dir):
 
 
 def expclr_hparams(method):
-    """Returns the (delta, lr, tau, sim_max) actually in force for an ExpCLR variant.
-
-    Args:
-        method: Variant name, e.g. "ExpCLR-diverso".
-
-    Returns:
-        Tuple with the margin, learning rate, temperature and sim_max mode.
-    """
     v = EXPCLR_VARIANTS[method]
     return (v.get("delta", EXPCLR_DELTA), v.get("lr", EXPCLR_LR),
             v.get("tau", EXPCLR_TAU), v.get("sim_max", "train"))
 
-# SimCLR variants. Each is a first-class "method": it gets its own pre-training
-# (SimCLR encoder with the given train_simclr.py flags) and its own result rows
-# (labelled with the variant name). "tag" disambiguates the saved .pth so variants
-# never overwrite each other. "SimCLR" (empty flags/tag) is the standard control.
-# The registry is extensible: add augmentation variants (e.g. --aug_mode) the same way.
-# Neighbor-positive index directories. The pairing STRATEGY is encoded by the directory
-# (each holds neighbor_index_<metric>.npy); the metric selects the file inside it.
-_NIDX_SESSION   = "data/processed/neighbor_index"            # same subject + same session (main)
-_NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"  # same age, different subject
-_NIDX_DIFFAGE   = "data/processed/neighbor_index_diffage"    # same subject, different age
+_NIDX_SESSION   = "data/processed/neighbor_index"
+_NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"
+_NIDX_DIFFAGE   = "data/processed/neighbor_index_diffage"
 
 
 def _nbr(metric, index_dir):
-    """SimCLR flags for a neighbor-positive variant with a given metric and index dir."""
     return ["--positives", "neighbor", "--neighbor_metric", metric, "--neighbor_index_dir", index_dir]
 
 
 SIMCLR_VARIANTS = {
-    "SimCLR":                 {"flags": [], "tag": ""},                             # standard control
-    # same-session neighbor positives (main experiment)
+    "SimCLR":                 {"flags": [], "tag": ""},
     "SimCLR-nbr-cosine":      {"flags": _nbr("cosine", _NIDX_SESSION),      "tag": "nbrcosine"},
     "SimCLR-nbr-wasser":      {"flags": _nbr("wasserstein", _NIDX_SESSION), "tag": "nbrwasser"},
     "SimCLR-nbr-riemann":     {"flags": _nbr("riemann", _NIDX_SESSION),     "tag": "nbrriemann"},
-    # ablation A: cross-subject, same age (developmental signal vs subject identity)
     "SimCLR-xsubj-cosine":    {"flags": _nbr("cosine", _NIDX_CROSSSUBJ),      "tag": "xscosine"},
     "SimCLR-xsubj-wasser":    {"flags": _nbr("wasserstein", _NIDX_CROSSSUBJ), "tag": "xswasser"},
     "SimCLR-xsubj-riemann":   {"flags": _nbr("riemann", _NIDX_CROSSSUBJ),     "tag": "xsriemann"},
-    # ablation B: same subject, different age (breaks the age==session shortcut)
     "SimCLR-diffage-cosine":  {"flags": _nbr("cosine", _NIDX_DIFFAGE),      "tag": "dacosine"},
     "SimCLR-diffage-wasser":  {"flags": _nbr("wasserstein", _NIDX_DIFFAGE), "tag": "dawasser"},
     "SimCLR-diffage-riemann": {"flags": _nbr("riemann", _NIDX_DIFFAGE),     "tag": "dariemann"},
@@ -149,19 +109,6 @@ def parse_output(output):
     return nrmse, r2, rmse, subject_avgs
 
 def config_data_paths(zone, frequency):
-    """Builds the processed data/metadata paths for a zone x frequency config.
-
-    Mirrors the layout produced by run_pipeline.py: one folder per config at
-    ``data/processed/{zone}_{frequency}/`` holding processed_windows.npy and
-    processed_metadata.csv.
-
-    Args:
-        zone (str): Brain zone (e.g., "all", "frontal").
-        frequency (str): Frequency band (e.g., "all", "alpha").
-
-    Returns:
-        tuple[str, str]: (windows_path, metadata_path).
-    """
     cfg_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
     return (os.path.join(cfg_dir, "processed_windows.npy"),
             os.path.join(cfg_dir, "processed_metadata.csv"))
@@ -173,24 +120,6 @@ VAE_FAMILY = ("VAE", "CVAE", "CVAE-SP")
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=0.003,
                     vae_prior="standard", vae_free_bits=0.0, cvae_cond_dim=16, vae_conditional=False,
                     simclr_flags=None, simclr_tag=""):
-    """
-    Constructs and runs a single call to pretraining script, excluding test subjects.
-    Returns the path to the trained model.
-
-    Args:
-        method: Pre-training method (SimCLR, AE, MAE, VAE, TripletLoss)
-        target: Target for TripletLoss (ignored for SimCLR and AE)
-        zone: Brain zone
-        frequency: Frequency band
-        test_subjects: List of subjects to exclude
-        fold_id: Unique fold identifier for naming the model
-        no_skip: If True, forces retraining even if the model exists
-        vae_beta: KL weight for the VAE (encoded in its model filename)
-        simclr_flags: Extra flags for train_simclr.py that select a SimCLR variant
-            (e.g. ["--positives", "neighbor", "--neighbor_metric", "cosine"]).
-        simclr_tag: Short tag appended to the SimCLR model filename so different
-            variants never overwrite each other's checkpoint.
-    """
     simclr_flags = list(simclr_flags or [])
     if method in ["PCA", "supervised"]:
         # These methods do not require pre-training
@@ -198,10 +127,6 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
 
     # Determine the model filename based on the method
     if method == "SimCLR":
-        # Embed the variant tag INSIDE the fold_id handed to train_simclr.py: that script
-        # builds its own .pth name from --fold_id, so the tag must travel through fold_id
-        # for the saved file to match what we look for here (one distinct checkpoint per
-        # variant, no collisions).
         eff_fold_id = f"{fold_id}_{simclr_tag}" if simclr_tag else fold_id
         model_filename = f"SimCLR_{zone}_{frequency}_{eff_fold_id}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
     elif method == "AE":
@@ -211,16 +136,11 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     elif method == "TripletLoss":
         model_filename = f"Triplet_{target}_{zone}_{frequency}_{fold_id}_emb128_m0.4.pth"
     elif method in VAE_FAMILY:
-        # Must mirror the model_name built in src/train_vae.py exactly (the label is
-        # forwarded as --tag so the filename prefix equals the method/result label).
         model_filename = (
             f"{method}_{zone}_{frequency}_{fold_id}"
             f"_hidden128_beta{vae_beta}_prior{vae_prior}_fb{vae_free_bits}_e100.pth"
         )
     elif method in EXPCLR_VARIANTS:
-        # Must mirror the checkpoint name built in src/train_expclr.py exactly. The descriptor
-        # and the tuned hyperparameters are what distinguish one variant's checkpoint from
-        # another's, and a re-tuned run from the one that came before it.
         delta, lr, tau, _ = expclr_hparams(method)
         model_filename = (
             f"ExpCLR_{zone}_{frequency}_{fold_id}_{EXPCLR_VARIANTS[method]['descriptor']}"
@@ -239,8 +159,6 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
 
     # Build command based on the method
     if method == "SimCLR":
-        # Point SimCLR at the same zone x frequency data folder that downstream reads
-        # (its default is the empty data/processed/5_s), then append the variant flags.
         simclr_data_dir = os.path.join("data", "processed", f"{zone}_{frequency}")
         command = [
             "python", "src/train_simclr.py",
@@ -307,8 +225,6 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
 
-    # Point the generative train scripts at the zone x frequency data (they share
-    # --data-path/--meta-path); otherwise they fall back to the empty data/processed/5_s.
     if method in ("AE", "MAE") or method in VAE_FAMILY:
         win_path, meta_path = config_data_paths(zone, frequency)
         command += ["--data-path", win_path, "--meta-path", meta_path]
@@ -349,15 +265,6 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         return None
 
 def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None, cond_dim=16):
-    """
-    Constructs and runs a single call to downstream.py.
-    Returns: (nrmse, r2, rmse, subject_avgs)
-
-    Args:
-        method: Result label (may be a SimCLR variant name, e.g. "SimCLR-nbr-cosine").
-        downstream_method: The architecture passed to downstream.py's --method (one of
-            its fixed choices). For SimCLR variants this is "SimCLR"; defaults to `method`.
-    """
     win_path, meta_path = config_data_paths(zone, frequency)
     command = [
         "python", "src/downstream.py",
@@ -375,7 +282,6 @@ def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_
     if model_path is not None:
         command.extend(["--model_path", model_path])
 
-    # The CVAE backbone must be rebuilt with the same condition-embedding width.
     if (downstream_method or method) == "CVAE":
         command.extend(["--cond-dim", str(cond_dim)])
 
@@ -423,17 +329,11 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     fold_id = f"fold{fold_idx}"
     seed = args.base_seed + fold_idx
 
-    # Optional method subset (e.g., --methods AE MAE VAE) to bound cost.
     selected = set(args.methods) if getattr(args, "methods", None) else None
     def _use(m):
         return selected is None or m in selected
 
-    # SimCLR expands into the requested variants (control + neighbor positives, ...).
-    # Each variant is treated as its own method downstream; "SimCLR" in the base lists
-    # is replaced by the selected variant names.
     simclr_variants = list(getattr(args, "simclr_variants", None) or ["SimCLR"]) if _use("SimCLR") else []
-    # ExpCLR expands the same way: "ExpCLR" in the base lists is replaced by the selected
-    # descriptor variants, each of which becomes its own result label.
     expclr_variants = list(getattr(args, "expclr_variants", None) or ["ExpCLR"]) if _use("ExpCLR") else []
     def _expand(mlist):
         out = []
@@ -461,11 +361,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     # ========================================================================
     print(f"\n[PHASE 1] Pre-training models for fold {fold_idx+1}...", flush=True)
 
-    # 1.1 Pre-train each selected SimCLR variant (once each, independent of target)
     for variant in simclr_variants:
         spec = SIMCLR_VARIANTS[variant]
-        # Each variant's flags are self-contained (including --neighbor_index_dir for
-        # neighbor variants), so the pairing strategy/metric is fully specified here.
         print(f"\n  Pre-training {variant} (self-supervised)...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method="SimCLR", target=None, zone=args.zone, frequency=args.frequency,
@@ -493,7 +390,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["MAE"] = None
 
-    # 1.4 Pre-train VAE (once, independent of target). Baseline: standard N(0,I) prior.
     if _use("VAE"):
         print(f"\n  Pre-training VAE (variational self-supervised, beta={args.vae_beta})...", flush=True)
         pretrained_models["VAE"] = run_pretraining(
@@ -505,8 +401,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["VAE"] = None
 
-    # 1.4b Pre-train CVAE (age-conditioned encoder + conditional/rich prior). This is the
-    # rich-prior configuration; CVAE-SP below isolates the prior with the same encoder.
     if _use("CVAE"):
         print(f"\n  Pre-training CVAE (age-conditioned, conditional/rich prior, "
               f"beta={args.vae_beta})...", flush=True)
@@ -520,9 +414,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["CVAE"] = None
 
-    # 1.4c Pre-train CVAE-SP (age-conditioned encoder + STANDARD prior). Ablation row:
-    # same conditional architecture as CVAE but N(0,I) prior, to isolate the rich prior's
-    # marginal effect within the conditional model.
     if _use("CVAE-SP"):
         print(f"\n  Pre-training CVAE-SP (age-conditioned, standard prior, "
               f"beta={args.vae_beta})...", flush=True)
@@ -536,9 +427,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["CVAE-SP"] = None
 
-    # 1.4d Pre-train ExpCLR (E3): contrastive learning guided by the continuous expert
-    # descriptor instead of augmented views (Nonnenmacher et al., ICML 2022).
-    # One pre-training per requested descriptor variant, each with its own checkpoint.
     for variant in expclr_variants:
         print(f"\n  Pre-training {variant} (descriptor={EXPCLR_VARIANTS[variant]['descriptor']}, "
               f"tau={EXPCLR_TAU}, delta={EXPCLR_DELTA})...", flush=True)
@@ -549,7 +437,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     for variant in EXPCLR_VARIANTS:
         pretrained_models.setdefault(variant, None)
 
-    # 1.5 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
         if not _use("TripletLoss"):
             pretrained_models[f"TripletLoss_{target}"] = None
@@ -589,7 +476,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\nTarget '{target}': {len(valid_train_subjects)} train subjects, {len(valid_test_subjects)} test subjects")
 
         for eval_mode in eval_modes:
-            # Select methods based on eval_mode (respecting the optional --methods subset)
             if eval_mode == "linear_probe":
                 methods = lp_methods
             else:  # fine_tuning
@@ -599,8 +485,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                 experiment_counter += 1
                 print(f"\n  [{experiment_counter}/{total_experiments}] Evaluating: {method} | {target} | {eval_mode}")
 
-                # Determine which pre-trained model to use. SimCLR variants keep their
-                # variant name as the result label but evaluate with downstream --method SimCLR.
                 downstream_method = method
                 if method in SIMCLR_VARIANTS:
                     model_path = pretrained_models.get(method)
@@ -614,12 +498,9 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                 elif method == "CVAE":
                     model_path = pretrained_models["CVAE"]
                 elif method == "CVAE-SP":
-                    # Same CVAE architecture, standard prior; evaluate as --method CVAE.
                     model_path = pretrained_models["CVAE-SP"]
                     downstream_method = "CVAE"
                 elif method in EXPCLR_VARIANTS:
-                    # Descriptor variants keep their own result label but share the encoder
-                    # architecture, so downstream.py always sees --method ExpCLR.
                     model_path = pretrained_models.get(method)
                     downstream_method = "ExpCLR"
                 elif method == "TripletLoss":
@@ -697,8 +578,6 @@ def parse_fold_ranges(fold_ranges_arg):
 
 
 def main(args):
-    # Load metadata to get subject IDs for cross-validation. Default to the metadata of the
-    # selected zone x frequency config; an explicit --meta_path overrides it.
     meta_path = args.meta_path if args.meta_path else config_data_paths(args.zone, args.frequency)[1]
     meta_df = pd.read_csv(meta_path)
     print(f"[INFO] Using metadata: {meta_path}", flush=True)
@@ -1000,7 +879,7 @@ if __name__ == "__main__":
         "--vae_free_bits",
         type=float,
         default=0.0,
-        help="Per-dimension KL floor (nats) for VAE/CVAE pretraining (anti-collapse)."
+        help="Per-dimension KL floor (nats) for VAE/CVAE pretraining."
     )
     parser.add_argument(
         "--cvae_cond_dim",

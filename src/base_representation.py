@@ -50,19 +50,6 @@ AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", 
 
 
 def get_model_path(method, zone, frequency, target=None, save_model_dir="save/models"):
-    """
-    Builds the path to the general pre-trained model (no fold_id).
-
-    Args:
-        method: representation method (SimCLR, AE, MAE, TripletLoss, VAE, CVAE, CVAE-SP)
-        zone: brain region (all, frontal, etc.)
-        frequency: frequency band (all, alpha, etc.)
-        target: target for TripletLoss (age, cit_36mo). Ignored for other methods.
-        save_model_dir: directory containing the models
-
-    Returns:
-        Model path, or None if not applicable (Raw/PCA) or no VAE/CVAE checkpoint found.
-    """
     if method == "Raw" or method == "PCA":
         return None
 
@@ -77,8 +64,6 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
             raise ValueError("TripletLoss requires a target to be specified")
         filename = f"Triplet_{target}_{zone}_{frequency}_emb128_m0.4.pth"
     elif method in ("VAE", "CVAE", "CVAE-SP"):
-        # The VAE/CVAE filename encodes beta/prior/free-bits, which vary per run, so
-        # resolve the most recent matching checkpoint by glob instead of a fixed name.
         pattern = os.path.join(save_model_dir, f"{method}_{zone}_{frequency}*.pth")
         matches = glob.glob(pattern)
         if not matches:
@@ -92,22 +77,6 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
 
 def load_model(method, model_path, input_size, n_channels, hidden_size=128,
                sfreq=250, device=None, cond_dim=16):
-    """
-    Loads a pre-trained model.
-
-    Args:
-        method: model type (SimCLR, AE, MAE, TripletLoss, VAE, CVAE)
-        model_path: path to the .pth file
-        input_size: temporal length of the signals
-        n_channels: number of EEG channels
-        hidden_size: latent space dimensionality
-        sfreq: sampling frequency
-        device: device (cuda/cpu)
-        cond_dim: CVAE condition-embedding width (must match training)
-
-    Returns:
-        Model loaded in evaluation mode
-    """
     if method == "SimCLR" or method == "TripletLoss":
         model = EnhancedAttentionLSTM(
             input_size=input_size,
@@ -141,8 +110,6 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
             lstm_hidden_size=hidden_size // 2
         )
     elif method in ("CVAE", "CVAE-SP"):
-        # Same conditional architecture; the prior (rich vs standard) only shaped
-        # training and is not needed to extract embeddings.
         model = ConditionalVariationalAttentionLSTMAutoencoder(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -155,9 +122,6 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
     else:
         raise ValueError(f"Unknown method for model loading: {method}")
 
-    # VAE/CVAE checkpoints may carry prior submodule keys unused for embedding
-    # extraction; load non-strictly so they don't block a valid backbone load, but
-    # surface any missing/unexpected keys so a genuinely broken load is not hidden.
     strict = method not in ("VAE", "CVAE", "CVAE-SP")
     result = model.load_state_dict(torch.load(model_path, map_location=device), strict=strict)
     if not strict and (result.missing_keys or result.unexpected_keys):

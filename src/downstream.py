@@ -22,24 +22,9 @@ from utils import CANONICAL_AGES, ages_to_indices
 
 
 def cvae_condition_usage_check(backbone, X_windows, ages, device, n_samples=128):
-    """Sanity check: does the CVAE actually use the age condition?
-
-    Reconstructs a batch with the true session age vs. a deliberately wrong age and
-    compares reconstruction MSE. If the model uses the condition, the true-age
-    reconstruction should be clearly better (lower MSE). This is a printed diagnostic;
-    it does not affect the probe metrics.
-
-    Args:
-        backbone (ConditionalVariationalAttentionLSTMAutoencoder): Loaded CVAE.
-        X_windows (numpy.ndarray): Windows (N, C, T).
-        ages (array-like): Per-window session ages aligned with ``X_windows``.
-        device (torch.device): Compute device.
-        n_samples (int): Number of windows to sample for the check.
-    """
     n = min(n_samples, len(X_windows))
     x = torch.tensor(X_windows[:n], dtype=torch.float32, device=device)
     cond = torch.as_tensor(ages_to_indices(ages[:n]), dtype=torch.long, device=device)
-    # Every window gets a genuinely different age (next canonical age, cyclically).
     wrong = (cond + 1) % backbone.n_conditions
     backbone.eval()
     with torch.no_grad():
@@ -224,7 +209,6 @@ def train_model_regression(
     model_tag,
     save_dir,
 ):
-
     for epoch in range(num_epochs):
         train_loss, train_nrmse, _, _, _, _= run_epoch_regression(
             model, train_loader, criterion, optimizer, device, train=True
@@ -339,7 +323,7 @@ def evaluate_and_plot(
     plt.close()
 
     print(f"Regression plot saved to: {fig_path}")
-    
+
 
 # ============================
 #   MAIN
@@ -379,7 +363,6 @@ def main(args):
     )
 
     if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "ExpCLR"]:
-
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
 
@@ -396,7 +379,6 @@ def main(args):
 
         model_map = {
             "SimCLR": EnhancedAttentionLSTM,
-            # ExpCLR pre-trains the very same encoder; only the objective differs.
             "ExpCLR": EnhancedAttentionLSTM,
             "AE": AttentionLSTMAutoencoder,
             "MAE": MaskedAttentionLSTMAutoencoder,
@@ -406,8 +388,6 @@ def main(args):
         }
         model_class = model_map.get(args.method)
 
-        # The CVAE needs the condition sizes to rebuild the same architecture; they
-        # must match the values used at training (canonical ages, default cond_dim).
         if args.method == "CVAE":
             model_params = {
                 **model_params,
@@ -416,8 +396,6 @@ def main(args):
             }
 
         backbone = model_class(**model_params).to(device)
-        # strict=False tolerates the (unused-for-probing) prior submodule keys, which
-        # may or may not be present depending on the prior used at training.
         strict = args.method not in ["VAE", "CVAE"]
         missing, unexpected = backbone.load_state_dict(
             torch.load(args.model_path, map_location=device), strict=strict
@@ -427,14 +405,12 @@ def main(args):
                   f"unexpected={list(unexpected)}")
         print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
 
-        # Sanity check: verify the CVAE actually exploits the age condition. It is only
-        # a diagnostic print, so a failure here must never abort the actual evaluation.
         if args.method == "CVAE" and "age" in meta_df.columns:
             try:
                 cvae_condition_usage_check(
                     backbone, X_task, meta_df.loc[mask, "age"].values, device
                 )
-            except Exception as exc:  # noqa: BLE001 - diagnostic must not break the run
+            except Exception as exc:
                 print(f"[WARN] CVAE condition check skipped: {exc}")
 
         # 2) Build full model and optionally freeze backbone
@@ -457,7 +433,7 @@ def main(args):
             )
 
         model_tag = f"{args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}"
-    
+
     elif args.method == "PCA":
         embedding_size = args.embedding_size
 
@@ -539,11 +515,10 @@ def main(args):
         plot_dir=args.plot_dir,
         fold_id=args.fold_id,
     )
-    
+
     print("\nProcess completed.")
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(
         description="Validation of a pre-trained encoder on a regression task (linear probing / fine-tuning)."
     )
