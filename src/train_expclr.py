@@ -11,6 +11,11 @@ import torch
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader, Dataset
 
+from checkpoint_naming import (
+    checkpoint_is_reusable,
+    expclr_checkpoint_name,
+    write_sidecar,
+)
 from loss import ExpCLRLoss
 from models import EnhancedAttentionLSTM
 
@@ -54,26 +59,6 @@ def prepare_descriptor(features, *, quality=None, min_r2=None):
     F[:, constant] = 0.0
 
     return F, keep
-
-
-def checkpoint_is_reusable(checkpoint_path, expected):
-    checkpoint_path = str(checkpoint_path)
-    if not os.path.exists(checkpoint_path):
-        return False
-    sidecar = checkpoint_path.replace(".pth", "_config.json")
-    if not os.path.exists(sidecar):
-        return False
-    with open(sidecar) as fh:
-        recorded = json.load(fh)
-    for key, value in expected.items():
-        if key not in recorded:
-            return False
-        if isinstance(value, float) and isinstance(recorded[key], (int, float)):
-            if not np.isclose(recorded[key], value):
-                return False
-        elif recorded[key] != value:
-            return False
-    return True
 
 
 def effective_dimensionality(z):
@@ -258,40 +243,40 @@ def main(args):
               f"{final['equidistant_loss']:.4f}. Delta is mismatched to the descriptor scale, so "
               f"most of the objective is an irreducible bias rather than learnable signal.")
 
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
     model_path = os.path.join(
         args.save_dir,
-        f"ExpCLR_{args.zone}_{args.frequency}{fold_suffix}_{args.descriptor}"
-        f"_batch_{args.batch_size}_lr_{args.lr}_tau_{args.temperature}_delta_{args.delta}.pth",
+        expclr_checkpoint_name(
+            args.zone, args.frequency, args.fold_id, args.descriptor,
+            batch_size=args.batch_size, lr=args.lr,
+            temperature=args.temperature, delta=args.delta,
+        ),
     )
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 
-    sidecar = model_path.replace(".pth", "_config.json")
-    with open(sidecar, "w") as fh:
-        json.dump(
-            {
-                "descriptor": args.descriptor,
-                "descriptor_dim": int(F.shape[1]),
-                "n_windows": int(len(X)),
-                "feat_max_dist": feat_max_dist,
-                "delta": args.delta,
-                "temperature": None if args.no_hard_negative_mining else args.temperature,
-                "loss_on": args.loss_on,
-                "sim_max": args.sim_max,
-                "lr": args.lr,
-                "dropout": args.dropout,
-                "embedding_size": args.embedding_size,
-                "batch_size": args.batch_size,
-                "num_epochs": args.num_epochs,
-                "seed": args.seed,
-                "exclude_subjects": sorted(args.exclude_subjects),
-                "final_loss": losses[-1] if losses else None,
-                "effective_dim": final["effective_dim"],
-            },
-            fh,
-            indent=2,
-        )
+    write_sidecar(model_path, {
+        "method": "ExpCLR",
+        "zone": args.zone,
+        "frequency": args.frequency,
+        "fold_id": args.fold_id,
+        "descriptor": args.descriptor,
+        "descriptor_dim": int(F.shape[1]),
+        "n_windows": int(len(X)),
+        "feat_max_dist": feat_max_dist,
+        "delta": args.delta,
+        "temperature": None if args.no_hard_negative_mining else args.temperature,
+        "loss_on": args.loss_on,
+        "sim_max": args.sim_max,
+        "lr": args.lr,
+        "dropout": args.dropout,
+        "embedding_size": args.embedding_size,
+        "batch_size": args.batch_size,
+        "num_epochs": args.num_epochs,
+        "seed": args.seed,
+        "exclude_subjects": sorted(args.exclude_subjects),
+        "final_loss": losses[-1] if losses else None,
+        "effective_dim": final["effective_dim"],
+    })
 
     plt.plot(range(1, args.num_epochs + 1), losses, marker="o")
     plt.xlabel("Epoch")
@@ -300,7 +285,9 @@ def main(args):
     plt.grid(True)
     plt.tight_layout()
     plot_path = os.path.join(
-        args.plot_dir, f"ExpCLR_{args.zone}_{args.frequency}{fold_suffix}_training_loss_curve.png"
+        args.plot_dir,
+        f"ExpCLR_{args.zone}_{args.frequency}"
+        f"{('_' + args.fold_id) if args.fold_id else ''}_training_loss_curve.png"
     )
     plt.savefig(plot_path)
     print(f"Loss curve saved to {plot_path}")

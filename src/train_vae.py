@@ -12,6 +12,7 @@ from models import (
     VariationalAttentionLSTMAutoencoder,
     ConditionalVariationalAttentionLSTMAutoencoder,
 )
+from checkpoint_naming import vae_checkpoint_name, write_sidecar
 from utils import split_dataset, create_dataloader, ages_to_indices, CANONICAL_AGES
 from loss import build_prior, vae_elbo, kl_beta
 
@@ -336,13 +337,12 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
     method_tag = args.tag if args.tag else ("CVAE" if args.conditional else "VAE")
-    model_name = (
-        f"{method_tag}_{args.zone}_{args.frequency}{fold_suffix}"
-        f"_hidden{args.hidden_size}_beta{args.beta}_prior{args.prior}"
-        f"_fb{args.free_bits}_e{args.epochs}"
-    )
+    model_name = vae_checkpoint_name(
+        method_tag, args.zone, args.frequency, args.fold_id,
+        beta=args.beta, prior=args.prior, free_bits=args.free_bits,
+        hidden_size=args.hidden_size, epochs=args.epochs,
+    )[:-len(".pth")]
 
     print(f"[INFO] Starting model training: {model_name}")
     fit_model(
@@ -362,6 +362,26 @@ def main():
         save_fig_dir=args.save_fig_dir,
         max_lr=args.lr,
     )
+
+    if args.save_model_dir:
+        write_sidecar(os.path.join(args.save_model_dir, f"{model_name}.pth"), {
+            "method": method_tag,
+            "zone": args.zone,
+            "frequency": args.frequency,
+            "fold_id": args.fold_id,
+            "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "seed": getattr(args, "seed", None),
+            "hidden_size": args.hidden_size,
+            "beta": args.beta,
+            "prior": args.prior,
+            "free_bits": args.free_bits,
+            "conditional": bool(args.conditional),
+            "cond_dim": args.cond_dim if args.conditional else None,
+            "kl_anneal_epochs": args.kl_anneal_epochs,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "n_windows": int(len(X)),
+        })
 
     print("[INFO] Pipeline completed.")
 

@@ -3,12 +3,24 @@ import subprocess
 import re
 import argparse
 import json
+import sys
 
 import pandas as pd
 import numpy as np
 
 from sklearn.model_selection import KFold, LeaveOneOut
 from sklearn.metrics import r2_score
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+from checkpoint_naming import (
+    ae_checkpoint_name,
+    checkpoint_is_reusable,
+    expclr_checkpoint_name,
+    mae_checkpoint_name,
+    simclr_checkpoint_name,
+    triplet_checkpoint_name,
+    vae_checkpoint_name,
+)
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
@@ -119,42 +131,62 @@ VAE_FAMILY = ("VAE", "CVAE", "CVAE-SP")
 
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=0.003,
                     vae_prior="standard", vae_free_bits=0.0, cvae_cond_dim=16, vae_conditional=False,
-                    simclr_flags=None, simclr_tag=""):
+                    simclr_flags=None, simclr_tag="", allow_legacy=False):
     simclr_flags = list(simclr_flags or [])
     if method in ["PCA", "supervised"]:
         # These methods do not require pre-training
         return None
 
+    exclude_sorted = sorted(str(s) for s in test_subjects)
+    expected = {
+        "zone": zone,
+        "frequency": frequency,
+        "exclude_subjects": exclude_sorted,
+    }
+
     # Determine the model filename based on the method
     if method == "SimCLR":
         eff_fold_id = f"{fold_id}_{simclr_tag}" if simclr_tag else fold_id
-        model_filename = f"SimCLR_{zone}_{frequency}_{eff_fold_id}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
+        model_filename = simclr_checkpoint_name(zone, frequency, eff_fold_id)
+        expected.update({"method": "SimCLR", "fold_id": eff_fold_id})
     elif method == "AE":
-        model_filename = f"AE_{zone}_{frequency}_{fold_id}_hidden128_e100.pth"
+        model_filename = ae_checkpoint_name(zone, frequency, fold_id)
+        expected.update({"method": "AE", "fold_id": fold_id})
     elif method == "MAE":
-        model_filename = f"MAE_{zone}_{frequency}_{fold_id}_hidden128_mask30_block25_e100.pth"
+        model_filename = mae_checkpoint_name(zone, frequency, fold_id)
+        expected.update({"method": "MAE", "fold_id": fold_id})
     elif method == "TripletLoss":
-        model_filename = f"Triplet_{target}_{zone}_{frequency}_{fold_id}_emb128_m0.4.pth"
+        model_filename = triplet_checkpoint_name(target, zone, frequency, fold_id)
+        expected.update({"method": "TripletLoss", "fold_id": fold_id, "target": target})
     elif method in VAE_FAMILY:
-        model_filename = (
-            f"{method}_{zone}_{frequency}_{fold_id}"
-            f"_hidden128_beta{vae_beta}_prior{vae_prior}_fb{vae_free_bits}_e100.pth"
+        model_filename = vae_checkpoint_name(
+            method, zone, frequency, fold_id,
+            beta=vae_beta, prior=vae_prior, free_bits=vae_free_bits,
         )
+        expected.update({
+            "method": method,
+            "fold_id": fold_id,
+            "beta": vae_beta,
+            "prior": vae_prior,
+            "free_bits": vae_free_bits,
+            "conditional": bool(vae_conditional),
+        })
     elif method in EXPCLR_VARIANTS:
         delta, lr, tau, _ = expclr_hparams(method)
-        model_filename = (
-            f"ExpCLR_{zone}_{frequency}_{fold_id}_{EXPCLR_VARIANTS[method]['descriptor']}"
-            f"_batch_{EXPCLR_BATCH_SIZE}_lr_{lr}_tau_{tau}_delta_{delta}.pth"
+        model_filename = expclr_checkpoint_name(
+            zone, frequency, fold_id, EXPCLR_VARIANTS[method]["descriptor"],
+            batch_size=EXPCLR_BATCH_SIZE, lr=lr, temperature=tau, delta=delta,
         )
+        expected.update({"fold_id": fold_id, "descriptor": EXPCLR_VARIANTS[method]["descriptor"]})
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
 
     model_path = os.path.join("save/models", model_filename)
 
-    # Check if the model already exists
-    if not no_skip and os.path.exists(model_path):
-        print(f"  > Model already exists: {model_filename}. Skipping pretraining.")
+    # Reuse only a checkpoint whose sidecar matches the intended configuration
+    if not no_skip and checkpoint_is_reusable(model_path, expected, allow_legacy=allow_legacy):
+        print(f"  > Reusable model found: {model_filename}. Skipping pretraining.")
         return model_path
 
     # Build command based on the method
@@ -366,7 +398,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training {variant} (self-supervised)...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method="SimCLR", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
             simclr_flags=spec["flags"], simclr_tag=spec["tag"],
         )
 
@@ -375,7 +407,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training AE (self-supervised)...", flush=True)
         pretrained_models["AE"] = run_pretraining(
             method="AE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
         )
     else:
         pretrained_models["AE"] = None
@@ -385,7 +417,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training MAE (masked self-supervised)...", flush=True)
         pretrained_models["MAE"] = run_pretraining(
             method="MAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
         )
     else:
         pretrained_models["MAE"] = None
@@ -394,7 +426,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         print(f"\n  Pre-training VAE (variational self-supervised, beta={args.vae_beta})...", flush=True)
         pretrained_models["VAE"] = run_pretraining(
             method="VAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
             vae_beta=args.vae_beta, vae_prior="standard", vae_free_bits=args.vae_free_bits,
             vae_conditional=False,
         )
@@ -406,7 +438,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
               f"beta={args.vae_beta})...", flush=True)
         pretrained_models["CVAE"] = run_pretraining(
             method="CVAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
             vae_beta=args.vae_beta, vae_prior="conditional",
             vae_free_bits=args.vae_free_bits, cvae_cond_dim=args.cvae_cond_dim,
             vae_conditional=True,
@@ -419,7 +451,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
               f"beta={args.vae_beta})...", flush=True)
         pretrained_models["CVAE-SP"] = run_pretraining(
             method="CVAE-SP", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
             vae_beta=args.vae_beta, vae_prior="standard",
             vae_free_bits=args.vae_free_bits, cvae_cond_dim=args.cvae_cond_dim,
             vae_conditional=True,
@@ -432,7 +464,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
               f"tau={EXPCLR_TAU}, delta={EXPCLR_DELTA})...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method=variant, target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
         )
     for variant in EXPCLR_VARIANTS:
         pretrained_models.setdefault(variant, None)
@@ -453,7 +485,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
         pretrained_models[f"TripletLoss_{target}"] = run_pretraining(
             method="TripletLoss", target=target, zone=args.zone, frequency=args.frequency,
-            test_subjects=valid_test_subjects, fold_id=fold_id, no_skip=args.no_skip,
+            test_subjects=valid_test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy,
         )
 
     # ========================================================================
@@ -964,6 +996,11 @@ if __name__ == "__main__":
         "--no_skip",
         action="store_true",
         help="Force retraining even if model already exists."
+    )
+    parser.add_argument(
+        "--allow_legacy",
+        action="store_true",
+        help="Allow reusing checkpoints whose sidecar is a backfilled legacy record."
     )
     args = parser.parse_args()
     if args.expclr_config:

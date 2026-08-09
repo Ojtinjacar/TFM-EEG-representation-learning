@@ -122,11 +122,14 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
     else:
         raise ValueError(f"Unknown method for model loading: {method}")
 
-    strict = method not in ("VAE", "CVAE", "CVAE-SP")
-    result = model.load_state_dict(torch.load(model_path, map_location=device), strict=strict)
-    if not strict and (result.missing_keys or result.unexpected_keys):
-        print(f"[WARN] {method} load_state_dict non-strict: "
-              f"missing={list(result.missing_keys)}, unexpected={list(result.unexpected_keys)}")
+    state_dict = torch.load(model_path, map_location=device)
+    if method in ("VAE", "CVAE", "CVAE-SP"):
+        # Learnable-prior parameters are training-only; drop them and load the
+        # backbone strictly so a wrong checkpoint fails instead of silently
+        # producing random-weight embeddings.
+        state_dict = {k: v for k, v in state_dict.items()
+                      if not k.startswith("prior.")}
+    model.load_state_dict(state_dict, strict=True)
     model.to(device)
     model.eval()
 
