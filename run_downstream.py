@@ -14,6 +14,7 @@ from sklearn.metrics import r2_score
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from checkpoint_naming import (
     ae_checkpoint_name,
+    interfusion_checkpoint_name,
     checkpoint_is_reusable,
     expclr_checkpoint_name,
     mae_checkpoint_name,
@@ -24,8 +25,8 @@ from checkpoint_naming import (
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
-LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR"]
-FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR"]
+LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion", "ExpCLR"]
+FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion", "ExpCLR"]
 
 EXPCLR_DESCRIPTOR = "P_full"
 EXPCLR_BATCH_SIZE = 64
@@ -199,6 +200,16 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             print(f"  > [REUSE] {method}: legacy reuse disabled for the VAE "
                   f"(collapsed checkpoints, incompatible beta scale).")
             allow_legacy = False
+    elif method == "InterFusion":
+        model_filename = interfusion_checkpoint_name(zone, frequency, fold_id)
+        expected.update({
+            "method": "InterFusion",
+            "fold_id": fold_id,
+            "z_dim": 4,
+            "epochs": 20,
+            "pretrain_epochs": 20,
+            "lr": 1e-3,
+        })
     elif method in EXPCLR_VARIANTS:
         delta, lr, tau, _ = expclr_hparams(method)
         model_filename = expclr_checkpoint_name(
@@ -284,8 +295,16 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--tag", method,
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
+    elif method == "InterFusion":
+        command = [
+            "python", "src/train_interfusion.py",
+            "--zone", zone,
+            "--frequency", frequency,
+            "--fold_id", fold_id,
+            "--exclude_subjects"
+        ] + [str(s) for s in test_subjects]
 
-    if method in ("AE", "MAE", "VAE"):
+    if method in ("AE", "MAE", "VAE", "InterFusion"):
         win_path, meta_path = config_data_paths(zone, frequency)
         command += ["--data-path", win_path, "--meta-path", meta_path]
     if method == "VAE":
@@ -458,6 +477,16 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["VAE"] = None
 
+    if _use("InterFusion"):
+        print(f"\n  Pre-training InterFusion (hierarchical two-view HVAE)...",
+              flush=True)
+        pretrained_models["InterFusion"] = run_pretraining(
+            method="InterFusion", target=None, zone=args.zone, frequency=args.frequency,
+            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+        )
+    else:
+        pretrained_models["InterFusion"] = None
+
     for variant in expclr_variants:
         print(f"\n  Pre-training {variant} (descriptor={EXPCLR_VARIANTS[variant]['descriptor']}, "
               f"tau={EXPCLR_TAU}, delta={EXPCLR_DELTA})...", flush=True)
@@ -526,6 +555,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path = pretrained_models["MAE"]
                 elif method == "VAE":
                     model_path = pretrained_models["VAE"]
+                elif method == "InterFusion":
+                    model_path = pretrained_models["InterFusion"]
                 elif method in EXPCLR_VARIANTS:
                     model_path = pretrained_models.get(method)
                     downstream_method = "ExpCLR"

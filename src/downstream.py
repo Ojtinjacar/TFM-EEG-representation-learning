@@ -1,5 +1,7 @@
 import os
 import argparse
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -11,6 +13,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.decomposition import PCA
 
+from checkpoint_naming import sidecar_path
+from interfusion import InterFusionEEG
 from models import (
     EnhancedAttentionLSTM,
     AttentionLSTMAutoencoder,
@@ -378,11 +382,29 @@ def main(args):
         test_subjects=args.test_subjects
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR", "InterFusion"]:
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
 
         embedding_size = args.embedding_size
+
+        if args.method == "InterFusion":
+            # Architecture hyperparameters live in the checkpoint sidecar so
+            # train and eval can never drift apart.
+            with open(sidecar_path(args.model_path)) as fh:
+                sc = json.load(fh)
+            backbone = InterFusionEEG(
+                x_dim=X.shape[1], window=X.shape[2], z_dim=sc["z_dim"],
+                rnn_hidden=sc["rnn_hidden"], flow_levels=sc["flow_levels"],
+            ).to(device)
+            backbone.load_state_dict(
+                torch.load(args.model_path, map_location=device), strict=True
+            )
+            embedding_size = backbone.embedding_dim
+            print(f"Pre-trained backbone ('InterFusion') loaded from: "
+                  f"{args.model_path} (embedding_dim={embedding_size})")
+        else:
+            backbone = None
 
         # 1) Load pre-trained backbone
         model_params = {
@@ -403,11 +425,12 @@ def main(args):
         }
         model_class = model_map.get(args.method)
 
-        backbone = model_class(**model_params).to(device)
-        backbone.load_state_dict(
-            torch.load(args.model_path, map_location=device), strict=True
-        )
-        print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
+        if backbone is None:
+            backbone = model_class(**model_params).to(device)
+            backbone.load_state_dict(
+                torch.load(args.model_path, map_location=device), strict=True
+            )
+            print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
 
         # 2) Build full model and optionally freeze backbone
         head = Head(embedding_size, 1).to(device)
@@ -625,7 +648,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "ExpCLR"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "ExpCLR", "InterFusion"],
         required=True,
         help="Method to use."
     )

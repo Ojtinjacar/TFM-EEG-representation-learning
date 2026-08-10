@@ -40,7 +40,7 @@ def parse(s):
 
 
 CATS = [
-    ("Baseline / SSL puro", ["PCA", "AE", "MAE", "SimCLR", "VAE"]),
+    ("Baseline / SSL puro", ["PCA", "AE", "MAE", "SimCLR", "VAE", "InterFusion"]),
     ("Informado por etiqueta", ["TripletLoss", "supervised"]),
     ("Guiado por descriptor experto continuo (ExpCLR)", ["ExpCLR", "ExpCLR-diverso", "ExpCLR-madurativo"]),
     ("Neighbor - same session", ["SimCLR-nbr-cosine", "SimCLR-nbr-wasser", "SimCLR-nbr-riemann"]),
