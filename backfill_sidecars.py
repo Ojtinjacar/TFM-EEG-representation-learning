@@ -66,7 +66,8 @@ def parse_identity(filename):
     """
     stem = filename[:-len(".pth")]
     tokens = stem.split("_")
-    method = tokens[0]
+    # The filename token differs from the orchestrator's method name.
+    method = {"Triplet": "TripletLoss"}.get(tokens[0], tokens[0])
 
     zone_idx = next((i for i, t in enumerate(tokens[1:], start=1) if t in ZONES), None)
     if zone_idx is None or zone_idx + 1 >= len(tokens):
@@ -93,30 +94,65 @@ def parse_identity(filename):
     }
 
 
+def validate_against_legacy_results(folds):
+    """Validates the reconstructed folds against a real historical anchor.
+
+    The legacy raw result CSVs store subject_avgs whose y_true values (for the
+    age target) are the mean ages of each fold's test subjects. If the
+    reconstruction is right, the sorted multiset of mean ages computed from
+    the metadata for the reconstructed subjects must match every fold row.
+
+    Args:
+        folds (dict[str, list[str]]): Reconstructed ``fold{k}`` exclusions.
+
+    Returns:
+        tuple[int, int]: (rows compared, rows mismatched).
+    """
+    meta = pd.read_csv(META_PATH)
+    meta["subject"] = meta["subject"].astype(str)
+    mean_age = meta.groupby("subject")["age"].mean().to_dict()
+
+    checked, mismatched = 0, 0
+    for csv in sorted(glob.glob(
+            "results_*_legacy/**/downstream_raw_results_kfold_folds*.csv",
+            recursive=True)):
+        df = pd.read_csv(csv)
+        if "subject_avgs" not in df.columns or "fold" not in df.columns:
+            continue
+        for _, row in df.iterrows():
+            if row.get("target") != "age" or not isinstance(row["subject_avgs"], str):
+                continue
+            key = f"fold{int(row['fold'])}"
+            if key not in folds:
+                continue
+            y_true = sorted(float(p.split(",")[0])
+                            for p in row["subject_avgs"].split(";") if p)
+            expected = sorted(mean_age[s] for s in folds[key])
+            checked += 1
+            if len(y_true) != len(expected) or not np.allclose(y_true, expected, atol=1e-4):
+                mismatched += 1
+                print(f"[CHECK][MISMATCH] {os.path.basename(csv)} fold {row['fold']}")
+    return checked, mismatched
+
+
 def main():
     folds = fold_exclusions()
 
-    # Cross-validate the reconstruction against authentic ExpCLR sidecars.
-    mismatches = 0
-    for sc in glob.glob(os.path.join(MODELS_DIR, "ExpCLR_*_config.json")):
-        with open(sc) as fh:
-            recorded = json.load(fh)
-        identity = parse_identity(os.path.basename(sc).replace("_config.json", ".pth"))
-        if not identity or identity["fold_key"] not in folds:
-            continue
-        expected = folds[identity["fold_key"]]
-        actual = sorted(str(s) for s in recorded.get("exclude_subjects", []))
-        if actual and actual != expected:
-            mismatches += 1
-            print(f"[CHECK][MISMATCH] {os.path.basename(sc)}: reconstructed "
-                  f"{expected} != recorded {actual}")
-    if mismatches:
+    checked, mismatched = validate_against_legacy_results(folds)
+    if mismatched:
         raise SystemExit(
-            f"Reconstruction check failed for {mismatches} ExpCLR sidecars; "
-            "the historical split did not use the assumed KFold parameters. "
-            "Aborting without writing anything."
+            f"Reconstruction check failed for {mismatched}/{checked} legacy "
+            "result rows; the historical split did not use the assumed KFold "
+            "parameters. Aborting without writing anything."
         )
-    print("[CHECK] Reconstructed folds match all authentic ExpCLR sidecars.")
+    if checked == 0:
+        raise SystemExit(
+            "No legacy result rows were comparable: the KFold reconstruction "
+            "is UNVALIDATED. Refusing to write sidecars on an unanchored "
+            "assumption."
+        )
+    print(f"[CHECK] Reconstructed folds match {checked}/{checked} legacy "
+          f"result rows (per-subject mean ages).")
 
     written, updated, skipped = 0, 0, 0
     for pth in sorted(glob.glob(os.path.join(MODELS_DIR, "*.pth"))):

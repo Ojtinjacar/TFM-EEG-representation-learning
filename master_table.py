@@ -14,7 +14,8 @@ DIRS = [
 ]
 frames = []
 for d in DIRS:
-    files = sorted(glob.glob(f"{d}/downstream_raw_results_kfold*.csv"))
+    files = sorted(glob.glob(f"{d}/downstream_raw_results_kfold_folds*.csv"))
+    files += sorted(glob.glob(f"{d}/downstream_raw_results_kfold.csv"))
     if not files:
         print(f"[WARN] no result CSVs under {d}")
     frames.extend(pd.read_csv(f) for f in files)
@@ -59,7 +60,9 @@ def row(m, mode):
     yt = np.array([a[0] for a in avgs])
     yp = np.array([a[1] for a in avgs])
     rmg = np.sqrt(np.mean((yt - yp) ** 2))
-    return (rmg / np.std(yt), r["RMSE"].mean(), r["RMSE"].std(), r2_score(yt, yp), len(r))
+    std_yt = np.std(yt)
+    nrmse = np.nan if std_yt < 1e-8 else rmg / std_yt
+    return (nrmse, r["RMSE"].mean(), r["RMSE"].std(), r2_score(yt, yp), len(r))
 
 
 for mode in ["linear_probe", "fine_tuning"]:

@@ -50,12 +50,16 @@ def _train_steps(model, optimizer, n=2):
 def test_linear_probe_backbone_stays_in_eval_mode():
     model, _ = _build(freeze=True)
     model.train()
-    frozen_modules = [
-        m for m in model.backbone.modules()
-        if isinstance(m, (nn.BatchNorm2d, nn.Dropout))
-    ]
-    assert frozen_modules, "expected BN/Dropout modules in the backbone"
-    assert all(not m.training for m in frozen_modules)
+    # The backbone's dropout lives INSIDE nn.LSTM / nn.MultiheadAttention
+    # (there are no standalone nn.Dropout modules), so the freeze must be
+    # asserted on every module's training flag, not on Dropout instances.
+    assert all(not m.training for m in model.backbone.modules())
+    frozen_bn = [m for m in model.backbone.modules()
+                 if isinstance(m, nn.BatchNorm2d)]
+    frozen_recurrent = [m for m in model.backbone.modules()
+                        if isinstance(m, (nn.LSTM, nn.MultiheadAttention))]
+    assert frozen_bn, "expected BatchNorm2d modules in the backbone"
+    assert frozen_recurrent, "expected LSTM/attention modules in the backbone"
     assert model.head.training
 
 

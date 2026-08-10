@@ -19,6 +19,7 @@ from eval_expclr import (
     metrics_by_visit, paired_bootstrap_difference, session_metrics, subject_metrics,
 )
 from models import EnhancedAttentionLSTM
+from checkpoint_naming import expclr_checkpoint_name
 from train_expclr import checkpoint_is_reusable
 
 DATA = Path("data/processed/all_all")
@@ -46,8 +47,9 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int
     if len(excl) > 1:
         excl_tag = "_x" + hashlib.md5("_".join(excl).encode()).hexdigest()[:6]
     fold_id = f"loso_{tag}_e{epochs}_s{seed}_{sim_max}{excl_tag}_{subject}"
-    ckpt = Path("save/models") / (
-        f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
+    ckpt = Path("save/models") / expclr_checkpoint_name(
+        "all", "all", fold_id, "P_diverso",
+        batch_size=64, lr=lr, temperature=tau, delta=delta)
     expected = {"delta": delta, "lr": lr, "temperature": tau, "loss_on": "projection",
                 "sim_max": sim_max, "dropout": 0.0, "num_epochs": epochs, "seed": seed,
                 "exclude_subjects": excl}

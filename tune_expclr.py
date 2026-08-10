@@ -73,8 +73,9 @@ def split_subjects(subjects: np.ndarray, seed: int = 42) -> tuple[list[str], lis
 def train_one(delta: float, lr: float, sim_max: str, epochs: int, holdout: list[str],
               seed: int, tau: float = 1.0, descriptor: str = DEFAULT_DESCRIPTOR) -> Path | None:
     fold_id = f"tune_d{delta}_lr{lr}_t{tau}_{sim_max}_e{epochs}_s{seed}"
-    ckpt = Path("save/models") / (
-        f"ExpCLR_all_all_{fold_id}_{descriptor}_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
+    ckpt = Path("save/models") / expclr_checkpoint_name(
+        "all", "all", fold_id, descriptor,
+        batch_size=64, lr=lr, temperature=tau, delta=delta)
     if checkpoint_is_reusable(ckpt, {"delta": delta, "lr": lr, "temperature": tau,
                                      "sim_max": sim_max, "loss_on": "projection",
                                      "dropout": 0.0, "num_epochs": epochs, "seed": seed}):

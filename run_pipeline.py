@@ -103,6 +103,7 @@ def main(args):
                             "--batch_size", "512",
                             "--num_epochs", str(args.num_epochs),
                             "--fold_id", f"rep{i}",
+                            "--seed", str(1000 + i),
                             "--aug_mode", args.aug_mode,
                             "--positives", args.positives,
                             "--neighbor_metric", args.neighbor_metric,
@@ -121,6 +122,7 @@ def main(args):
                             "--save-fig-dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
                             "--epochs", str(args.num_epochs),
                             "--fold_id", f"rep{i}",
+                            "--seed", str(1000 + i),
                             "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
                     elif args.method in ["VAE", "CVAE"]:
@@ -135,6 +137,7 @@ def main(args):
                             "--save-fig-dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
                             "--epochs", str(args.num_epochs),
                             "--fold_id", f"rep{i}",
+                            "--seed", str(1000 + i),
                             "--beta", str(args.beta),
                             "--kl-anneal-epochs", str(args.kl_anneal_epochs),
                             "--free-bits", str(args.free_bits),
@@ -210,10 +213,9 @@ def main(args):
                     print("        ERROR: Could not find nRMSE in the output.")
 
     # --- 5. Final Visualization ---
-    if parse_failures:
-        print(f"\n[ERROR] {parse_failures} runs produced unparseable output; "
-              "their results are missing from the summary.")
     if not results:
+        if parse_failures:
+            print(f"\n[ERROR] {parse_failures} runs produced unparseable output.")
         print("\nNo results collected. Cannot generate plot.")
         sys.exit(1)
 
@@ -263,6 +265,12 @@ def main(args):
     plt.savefig(plot_path, dpi=300)
     print(f"Summary plot saved to: {plot_path}")
     plt.close()
+
+    if parse_failures:
+        print(f"\n[ERROR] {parse_failures} runs produced unparseable output; "
+              "their results are missing from the summary above.")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

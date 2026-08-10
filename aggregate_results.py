@@ -243,7 +243,7 @@ def main(args):
             # nRMSE global (normalised by std of the actual values across all subjects)
             rmse_global = np.sqrt(np.mean((y_true - y_pred) ** 2))
             std_global = np.std(y_true)
-            nrmse_global = rmse_global if std_global < 1e-8 else rmse_global / std_global
+            nrmse_global = np.nan if std_global < 1e-8 else rmse_global / std_global
             nrmse_global_list.append(nrmse_global)
 
             print(f"  {row['method']} | {row['eval_mode']} | {row['target']}: "

@@ -325,7 +325,9 @@ def evaluate_and_plot(
 
     # --- Regression plot ---
     os.makedirs(plot_dir, exist_ok=True)
-    if fold_id:
+    # model_tag already carries the fold suffix; only add fold_id when it is
+    # not embedded (standalone runs with a tag built elsewhere).
+    if fold_id and not model_tag.endswith(f"_{fold_id}"):
         fig_name = f"{model_tag}_{fold_id}_regression_plot.png"
     else:
         fig_name = f"{model_tag}_regression_plot.png"

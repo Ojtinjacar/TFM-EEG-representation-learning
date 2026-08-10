@@ -35,15 +35,28 @@ import pandas as pd
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CODE_DIR = os.path.dirname(_HERE)
-# apsd_baseline lives in a repo src/ next to code/ (fork checkout); add plausible locations.
+# Inside this repo the file lives at <repo>/src, so eda_utils and the heredado
+# repo are two levels up (the shared code/ directory); the original external
+# layout (code/src) is also covered.
+_OUTER_CODE = os.path.dirname(_CODE_DIR)
 _CANDIDATE_SRCS = [
-    _HERE, _CODE_DIR,
+    _HERE, _CODE_DIR, _OUTER_CODE,
     os.path.join(_CODE_DIR, "TFM-EEG-representation-learning", "src"),
     os.path.join(_CODE_DIR, "RL-DaSCI-CIMCYC-C", "src"),
+    os.path.join(_OUTER_CODE, "RL-DaSCI-CIMCYC-C", "src"),
 ]
 for _p in _CANDIDATE_SRCS:
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
+
+try:
+    import eda_utils  # noqa: F401
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "This index builder needs the shared eda_utils package (lives in the "
+        "TFM's code/ directory, outside this repo). Run it from a checkout "
+        "that has code/eda_utils available."
+    ) from exc
 
 from eda_utils import compute_epoch_roi_psd  # noqa: E402
 from neighbor_positives import VALID_METRICS, _session_distance_matrix, neighbor_index_array  # noqa: E402

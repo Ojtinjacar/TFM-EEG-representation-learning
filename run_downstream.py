@@ -92,9 +92,10 @@ SIMCLR_VARIANTS = {
 
 def parse_output(output):
     """
-    Parses the stdout of downstream.py to extract metrics and subject-level predictions.
-    Returns: (nrmse, r2, rmse, subject_avgs)
-    where subject_avgs is a list of tuples: [(y_true_mean, y_pred_mean), ...]
+    Parses the stdout of downstream.py to extract metrics and predictions.
+    Returns: (nrmse, r2, rmse, subject_avgs, session_avgs) where subject_avgs is
+    [(y_true_mean, y_pred_mean), ...] and session_avgs is
+    [(subject, y_true, y_pred_mean), ...].
     """
     # Search for metrics in "Subject-Avg" format. 'nan' is a legal value (e.g.
     # a fully degenerate target): it must parse, not silently drop the fold.
@@ -159,13 +160,25 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     if method == "SimCLR":
         eff_fold_id = f"{fold_id}_{simclr_tag}" if simclr_tag else fold_id
         model_filename = simclr_checkpoint_name(zone, frequency, eff_fold_id)
-        expected.update({"method": "SimCLR", "fold_id": eff_fold_id})
+        # The orchestrator never passes --aug_mode, and positives/metric come
+        # from the variant flags; pin them so a manually trained checkpoint
+        # with a different augmentation cannot be reused silently.
+        is_neighbor = "--positives" in simclr_flags
+        nbr_metric = (simclr_flags[simclr_flags.index("--neighbor_metric") + 1]
+                      if "--neighbor_metric" in simclr_flags else None)
+        expected.update({
+            "method": "SimCLR",
+            "fold_id": eff_fold_id,
+            "aug_mode": "legacy",
+            "positives": "neighbor" if is_neighbor else "augment",
+            "neighbor_metric": nbr_metric,
+        })
     elif method == "AE":
         model_filename = ae_checkpoint_name(zone, frequency, fold_id)
-        expected.update({"method": "AE", "fold_id": fold_id})
+        expected.update({"method": "AE", "fold_id": fold_id, "lr": 1e-3})
     elif method == "MAE":
         model_filename = mae_checkpoint_name(zone, frequency, fold_id)
-        expected.update({"method": "MAE", "fold_id": fold_id})
+        expected.update({"method": "MAE", "fold_id": fold_id, "lr": 1e-3})
     elif method == "TripletLoss":
         model_filename = triplet_checkpoint_name(target, zone, frequency, fold_id)
         expected.update({"method": "TripletLoss", "fold_id": fold_id, "target": target})
@@ -181,7 +194,15 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "prior": vae_prior,
             "free_bits": vae_free_bits,
             "conditional": bool(vae_conditional),
+            "lr": 1e-3,
         })
+        if allow_legacy:
+            # Legacy VAE-family checkpoints are provably collapsed AND their
+            # filename beta is in the pre-F1 code scale: same name, different
+            # objective. Never reuse them.
+            print(f"  > [REUSE] {method}: legacy reuse disabled for the VAE "
+                  f"family (collapsed checkpoints, incompatible beta scale).")
+            allow_legacy = False
     elif method in EXPCLR_VARIANTS:
         delta, lr, tau, _ = expclr_hparams(method)
         model_filename = expclr_checkpoint_name(
@@ -400,6 +421,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
     # Dictionary to store pre-trained models
     pretrained_models = {}
+    fold_failures = []
     pretrain_seed = args.base_seed + fold_idx
 
     # ========================================================================
@@ -596,6 +618,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
     print(f"\n{'='*80}", flush=True)
     print(f"FOLD {fold_idx+1} COMPLETED: Collected {len(fold_results)} results", flush=True)
+    if fold_failures:
+        print(f"FOLD {fold_idx+1} FAILURES ({len(fold_failures)}): {fold_failures}", flush=True)
     print(f"{'='*80}", flush=True)
 
     return fold_results
@@ -832,7 +856,7 @@ def main(args):
             # nRMSE global (normalised by std of actual values across all subjects)
             rmse_global = np.sqrt(np.mean((y_true - y_pred) ** 2))
             std_global = np.std(y_true)
-            nrmse_global = rmse_global if std_global < 1e-8 else rmse_global / std_global
+            nrmse_global = np.nan if std_global < 1e-8 else rmse_global / std_global
             nrmse_global_list.append(nrmse_global)
         else:
             # If <= 1 subject or no data, use original metrics
