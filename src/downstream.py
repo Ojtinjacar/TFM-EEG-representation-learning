@@ -395,7 +395,10 @@ def main(args):
                 sc = json.load(fh)
             backbone = InterFusionEEG(
                 x_dim=X.shape[1], window=X.shape[2], z_dim=sc["z_dim"],
-                rnn_hidden=sc["rnn_hidden"], flow_levels=sc["flow_levels"],
+                strides=tuple(sc.get("strides", (2, 1, 2, 1, 2, 2, 2))),
+                rnn_hidden=sc["rnn_hidden"],
+                dense_hidden=sc.get("dense_hidden", 500),
+                flow_levels=sc["flow_levels"],
             ).to(device)
             backbone.load_state_dict(
                 torch.load(args.model_path, map_location=device), strict=True

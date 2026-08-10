@@ -67,6 +67,36 @@ def test_embedding_shape_and_determinism(model):
     assert torch.equal(e1, e2), "the embedding must be deterministic"
 
 
+def test_embedding_mean_std_doubles_dims_and_rejects_unknown(model):
+    x = torch.randn(B, M, W)
+    e = model.get_embedding(x, stats="mean_std")
+    assert e.shape == (B, 2 * (M + 3))
+    assert torch.isfinite(e).all()
+    # the first half must equal the plain mean embedding
+    assert torch.equal(e[:, : M + 3], model.get_embedding(x))
+    with pytest.raises(ValueError):
+        model.get_embedding(x, stats="median")
+
+
+def test_get_score_shape_and_separates_fitted_data_from_noise(model):
+    torch.manual_seed(3)
+    x = torch.randn(B, M, W) * 0.1
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    for _ in range(30):
+        out = model(x)
+        opt.zero_grad()
+        out["loss"].backward()
+        opt.step()
+    model.eval()
+    with torch.no_grad():
+        score_train = model.get_score(x, n_samples=5)
+        score_noise = model.get_score(torch.randn(B, M, W) * 5.0, n_samples=5)
+    assert score_train.shape == (B,)
+    assert torch.isfinite(score_train).all()
+    assert score_train.mean() > score_noise.mean(), \
+        "fitted windows must be more likely than out-of-scale noise"
+
+
 # ---------------------------------------------------------------------------
 # RealNVP
 # ---------------------------------------------------------------------------

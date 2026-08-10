@@ -430,25 +430,67 @@ class InterFusionEEG(nn.Module):
     # ------------------------------------------------------------------
     # downstream interface
     # ------------------------------------------------------------------
-    def get_embedding(self, x):
-        """Deterministic (B, M + M') embedding for downstream heads.
+    def get_embedding(self, x, stats="mean"):
+        """Deterministic embedding for downstream heads.
 
-        Concatenates the W'-averaged z2 posterior mean (per channel, M dims)
-        with the time-averaged deterministic z1 mean sequence (M' dims). No
-        sampling and no flow: stable representation, gradients flow for
-        fine-tuning.
+        With ``stats="mean"`` (default, the protocol's representation):
+        concatenates the W'-averaged z2 posterior mean (M dims) with the
+        time-averaged deterministic z1 mean sequence (M' dims) -> (B, M + M').
+        With ``stats="mean_std"`` the temporal/W' standard deviations are
+        appended -> (B, 2*(M + M')); motivated by the burst-like nature of
+        infant EEG, where the temporal mean alone is degenerate. No sampling
+        and no flow: stable representation, gradients flow for fine-tuning.
 
         Args:
             x (torch.Tensor): Input windows (B, M, W).
+            stats (str): "mean" or "mean_std".
 
         Returns:
-            torch.Tensor: Embedding of shape (B, M + M').
+            torch.Tensor: Embedding of shape (B, M + M') or (B, 2*(M + M')).
+
+        Raises:
+            ValueError: If ``stats`` is not a supported mode.
         """
+        if stats not in ("mean", "mean_std"):
+            raise ValueError(f"Unknown stats mode: {stats!r} (use 'mean' or 'mean_std').")
         qz2_mean, _ = self.encode_z2(x)
         d = self.decoder(qz2_mean)
         a_seq = self._arnn_features(d)
         _, z1_mean, _ = self.qz1.sample(a_seq, deterministic=True)
-        return torch.cat([qz2_mean.mean(dim=2), z1_mean.mean(dim=1)], dim=1)
+        parts = [qz2_mean.mean(dim=2), z1_mean.mean(dim=1)]
+        if stats == "mean_std":
+            parts += [qz2_mean.std(dim=2), z1_mean.std(dim=1)]
+        return torch.cat(parts, dim=1)
+
+    def get_score(self, x, n_samples=10):
+        """Per-window reconstruction log-probability (anomaly score basis).
+
+        Monte Carlo estimate of E_q(z1,z2|x)[log p(x | z1, z2)], the
+        "reconstruction probability" the paper uses for anomaly detection
+        (its negative is the anomaly score). In the TFM this is used ONLY as
+        an exploratory atypicality marker, never as a clinical claim.
+
+        Args:
+            x (torch.Tensor): Input windows (B, M, W).
+            n_samples (int): Monte Carlo samples L (paper uses L=100 at test).
+
+        Returns:
+            torch.Tensor: Log-probability per window, shape (B,).
+        """
+        scores = []
+        for _ in range(n_samples):
+            qz2_mean, qz2_logstd = self.encode_z2(x)
+            z2 = qz2_mean + torch.exp(qz2_logstd) * torch.randn_like(qz2_mean)
+            d = self.decoder(z2)
+            a_seq = self._arnn_features(d)
+            z1_base, _, _ = self.qz1.sample(a_seq)
+            if self.posterior_flow is not None:
+                z1, _ = self.posterior_flow(z1_base)
+            else:
+                z1 = z1_base
+            x_mean, x_logstd = self.decode_x(z1, d)
+            scores.append(gaussian_log_prob(x, x_mean, x_logstd).sum(dim=(1, 2)))
+        return torch.stack(scores, dim=0).mean(dim=0)
 
 
 class PretrainVAE(nn.Module):

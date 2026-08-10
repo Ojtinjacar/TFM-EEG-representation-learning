@@ -132,6 +132,12 @@ def main():
                         help="Inter-metric latent width M' (paper: 2-4).")
     parser.add_argument("--rnn-hidden", type=int, default=500,
                         help="Backward-GRU hidden units (paper: 500).")
+    parser.add_argument("--dense-hidden", type=int, default=500,
+                        help="Feature/fusion dense units (paper: 500).")
+    parser.add_argument("--strides", type=int, nargs="+",
+                        default=[2, 1, 2, 1, 2, 2, 2],
+                        help="Conv-stack strides; controls W' "
+                             "(paper: 2 1 2 1 2 for W=100).")
     parser.add_argument("--flow-levels", type=int, default=20,
                         help="RealNVP levels on q(z1) (paper: 20).")
     parser.add_argument("--pretrain-epochs", type=int, default=20,
@@ -190,7 +196,8 @@ def main():
 
     model = InterFusionEEG(
         x_dim=X.shape[1], window=X.shape[2], z_dim=args.z_dim,
-        rnn_hidden=args.rnn_hidden, flow_levels=args.flow_levels,
+        strides=tuple(args.strides), rnn_hidden=args.rnn_hidden,
+        dense_hidden=args.dense_hidden, flow_levels=args.flow_levels,
     ).to(device)
     print(f"[INFO] InterFusion: M={X.shape[1]}, W={X.shape[2]}, "
           f"M'={args.z_dim}, W'={model.w_prime}, "
@@ -243,6 +250,8 @@ def main():
             "z_dim": args.z_dim,
             "w_prime": int(model.w_prime),
             "rnn_hidden": args.rnn_hidden,
+            "dense_hidden": args.dense_hidden,
+            "strides": list(args.strides),
             "flow_levels": args.flow_levels,
             "pretrain_epochs": args.pretrain_epochs,
             "epochs": args.epochs,
