@@ -35,9 +35,6 @@ def fit_probe(
     groups_train: np.ndarray,
     n_splits: int = 5,
 ) -> tuple[StandardScaler, Ridge]:
-    scaler = StandardScaler().fit(X_train)
-    Z = scaler.transform(X_train)
-
     n_groups = len(np.unique(groups_train))
     splits = min(n_splits, n_groups)
     if splits < 2:
@@ -45,14 +42,20 @@ def fit_probe(
     else:
         cv = GroupKFold(n_splits=splits)
         scores = np.zeros(len(ALPHA_GRID))
-        for inner_train, inner_val in cv.split(Z, y_train, groups_train):
+        for inner_train, inner_val in cv.split(X_train, y_train, groups_train):
+            # The scaler is fitted inside each inner split so that alpha
+            # selection never sees statistics of its own validation fold.
+            inner_scaler = StandardScaler().fit(X_train[inner_train])
+            Z_tr = inner_scaler.transform(X_train[inner_train])
+            Z_val = inner_scaler.transform(X_train[inner_val])
             for i, alpha in enumerate(ALPHA_GRID):
-                model = Ridge(alpha=alpha).fit(Z[inner_train], y_train[inner_train])
-                pred = model.predict(Z[inner_val])
+                model = Ridge(alpha=alpha).fit(Z_tr, y_train[inner_train])
+                pred = model.predict(Z_val)
                 scores[i] += np.mean(np.abs(pred - y_train[inner_val]))
         best_alpha = float(ALPHA_GRID[int(np.argmin(scores))])
 
-    return scaler, Ridge(alpha=best_alpha).fit(Z, y_train)
+    scaler = StandardScaler().fit(X_train)
+    return scaler, Ridge(alpha=best_alpha).fit(scaler.transform(X_train), y_train)
 
 
 def fit_knn_probe(X_train: np.ndarray, y_train: np.ndarray, k: int = 1):

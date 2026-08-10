@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -36,13 +37,20 @@ def load_data() -> tuple[np.ndarray, pd.DataFrame, np.ndarray]:
 
 def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int = 42,
                   delta: float = 1.0, lr: float = 5e-3, sim_max: str = "train",
-                  tau: float = 1.0) -> Path:
-    fold_id = f"loso_{tag}_e{epochs}_s{seed}_{sim_max}_{subject}"
+                  tau: float = 1.0, tuning_excluded: list[str] | None = None) -> Path:
+    # The fold encoder must not see the hyperparameter-tuning subjects either;
+    # a short hash of the full exclusion list keeps configurations with
+    # different tuning sets from sharing (and overwriting) checkpoint files.
+    excl = sorted({subject, *(tuning_excluded or [])})
+    excl_tag = ""
+    if len(excl) > 1:
+        excl_tag = "_x" + hashlib.md5("_".join(excl).encode()).hexdigest()[:6]
+    fold_id = f"loso_{tag}_e{epochs}_s{seed}_{sim_max}{excl_tag}_{subject}"
     ckpt = Path("save/models") / (
         f"ExpCLR_all_all_{fold_id}_P_diverso_batch_64_lr_{lr}_tau_{tau}_delta_{delta}.pth")
     expected = {"delta": delta, "lr": lr, "temperature": tau, "loss_on": "projection",
                 "sim_max": sim_max, "dropout": 0.0, "num_epochs": epochs, "seed": seed,
-                "exclude_subjects": [subject]}
+                "exclude_subjects": excl}
     if checkpoint_is_reusable(ckpt, expected):
         return ckpt
     cmd = [sys.executable, "src/train_expclr.py",
@@ -51,7 +59,7 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int
            "--fold_id", fold_id, "--num_epochs", str(epochs), "--seed", str(seed),
            "--delta", str(delta), "--lr", str(lr), "--temperature", str(tau),
            "--loss_on", "projection", "--dropout", "0.0", "--sim_max", sim_max,
-           "--exclude_subjects", subject]
+           "--exclude_subjects", *excl]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not ckpt.exists():
         raise RuntimeError(f"fallo el preentrenamiento de {subject}:\n{res.stdout[-2000:]}\n{res.stderr[-2000:]}")
@@ -78,7 +86,12 @@ class EmbeddingCache:
         self._misses = 0
 
     def get(self, checkpoint: Path | None) -> np.ndarray:
-        key = str(checkpoint) if checkpoint is not None else f"__random_s{self._random_seed}__"
+        if checkpoint is not None:
+            # The mtime keys out stale embeddings if a checkpoint file is
+            # retrained in place during the lifetime of this cache.
+            key = f"{checkpoint}:{Path(checkpoint).stat().st_mtime_ns}"
+        else:
+            key = f"__random_s{self._random_seed}__"
         cached = self._embeddings.get(key)
         if cached is not None:
             self._hits += 1
@@ -109,10 +122,15 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
     groups = meta.subject.values
     print(f"LOSO sobre {len(subjects)} sujetos | {len(meta)} ventanas | descriptor {F.shape}")
 
-    shuffled_path = FEATURES.with_name(f"expert_features_P_diverso_shuffled_s{seed}.npy")
+    # B3 permutes the FULL on-disk descriptor so the subprocess (which reloads
+    # the complete dataset) stays row-aligned; the artifact is derived data and
+    # lives under save/, not next to the real descriptors.
+    shuffled_path = OUT / f"expert_features_P_diverso_shuffled_s{seed}.npy"
     if "B3" in methods:
         rng = np.random.default_rng(seed)
-        np.save(shuffled_path, F[rng.permutation(len(F))])
+        F_full = np.load(FEATURES)
+        OUT.mkdir(parents=True, exist_ok=True)
+        np.save(shuffled_path, F_full[rng.permutation(len(F_full))])
 
     cache = EmbeddingCache(X, device, random_seed=seed)
     preds: dict[str, list[pd.DataFrame]] = {m: [] for m in methods}
@@ -131,7 +149,8 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
                     Xtr, Xte = F[train], F[test]
                 else:
                     emb = cache.get(pretrain_fold(subject, epochs, FEATURES, "expclr", seed,
-                                                  delta, lr, sim_max, tau))
+                                                  delta, lr, sim_max, tau,
+                                                  tuning_excluded=exclude_subjects))
                     Xtr = np.hstack([emb[train], F[train]])
                     Xte = np.hstack([emb[test], F[test]])
                 scaler, probe = fit_probe(Xtr, y[train], groups[train])
@@ -139,10 +158,11 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
             else:
                 if method == "ExpCLR":
                     ckpt = pretrain_fold(subject, epochs, FEATURES, "expclr", seed, delta, lr,
-                                         sim_max, tau)
+                                         sim_max, tau, tuning_excluded=exclude_subjects)
                 elif method == "B3":
                     ckpt = pretrain_fold(subject, epochs, shuffled_path, "shuffled", seed,
-                                         delta, lr, sim_max, tau)
+                                         delta, lr, sim_max, tau,
+                                         tuning_excluded=exclude_subjects)
                 elif method == "B2":
                     ckpt = None
                 else:
@@ -206,6 +226,10 @@ def main() -> None:
         args.exclude_subjects = cfg["validation_subjects"]
         print(f"config de {args.config}: delta={args.delta} lr={args.lr} tau={args.tau} "
               f"sim_max={args.sim_max} | {len(args.exclude_subjects)} sujetos excluidos")
+
+    if not args.exclude_subjects:
+        print("[AVISO] LOSO sin --config ni --exclude_subjects: los sujetos usados para "
+              "ajustar hiperparametros entraran en la evaluacion (sesgo optimista).")
 
     device = torch.device("mps" if torch.backends.mps.is_available()
                           else "cuda" if torch.cuda.is_available() else "cpu")

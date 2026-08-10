@@ -8,9 +8,6 @@ import pytest
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
-)
 
 from loss import ExpCLRLoss
 from train_expclr import (

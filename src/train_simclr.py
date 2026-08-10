@@ -194,9 +194,6 @@ def main(args):
     meta = meta_df.to_numpy()
 
     if args.positives == "neighbor":
-        _neighbor_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
-        if _neighbor_src not in sys.path:
-            sys.path.insert(0, _neighbor_src)
         from neighbor_positives import NeighborPositiveDataset
 
         nidx_path = os.path.join(args.neighbor_index_dir, f"neighbor_index_{args.neighbor_metric}.npy")
