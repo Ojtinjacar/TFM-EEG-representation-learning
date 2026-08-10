@@ -54,6 +54,7 @@ def fit_model(
     )
 
     train_losses, val_losses = [], []
+    best_val, best_state, best_epoch = float("inf"), None, -1
     for epoch in range(epochs):
         beta = kl_beta(epoch, target_beta, anneal_epochs)
 
@@ -85,7 +86,8 @@ def fit_model(
         train_losses.append(train_loss)
 
         model.eval()
-        val_loss = 0.0
+        val_loss, val_recon, val_kl = 0.0, 0.0, 0.0
+        val_mus = []
         with torch.no_grad():
             for batch in val_loader:
                 x_batch, c_batch = _unpack_batch(batch, device)
@@ -93,18 +95,41 @@ def fit_model(
                     reconstruction, mu, logvar, _ = model(x_batch, c_batch)
                 else:
                     reconstruction, mu, logvar, _ = model(x_batch)
-                loss, _, _ = vae_elbo(
+                loss, recon, kl = vae_elbo(
                     reconstruction, x_batch, mu, logvar, prior, beta,
                     cond=c_batch, free_bits=free_bits,
                 )
-                val_loss += loss.item() * x_batch.size(0)
+                bs = x_batch.size(0)
+                val_loss += loss.item() * bs
+                val_recon += recon.item() * bs
+                val_kl += kl.item() * bs
+                val_mus.append(mu.detach().cpu())
 
-        val_loss /= len(val_loader.dataset)
+        n_val = len(val_loader.dataset)
+        val_loss /= n_val
+        val_recon /= n_val
+        val_kl /= n_val
         val_losses.append(val_loss)
+
+        # Posterior-collapse diagnostics: dimensions whose mean responds to the
+        # input (variance of mu across validation windows above 0.01).
+        mu_all = torch.cat(val_mus)
+        active_dims = int((mu_all.var(dim=0) > 0.01).sum())
+
+        # Model selection uses the fixed-definition objective (target beta),
+        # not the annealed beta that changes meaning across warm-up epochs.
+        val_target = val_recon + target_beta * val_kl
+        if val_target < best_val:
+            best_val = val_target
+            best_epoch = epoch + 1
+            best_state = {k: v.detach().cpu().clone()
+                          for k, v in model.state_dict().items()}
 
         print(f"[{model_name}] Epoch {epoch+1}/{epochs} "
               f"- Train Loss = {train_loss:.6f} (recon = {train_recon:.6f}, "
-              f"KL = {train_kl:.6f}, beta = {beta:.4f}), Val Loss = {val_loss:.6f}")
+              f"KL = {train_kl:.6f}, beta = {beta:.6g}), Val Loss = {val_loss:.6f} "
+              f"(recon = {val_recon:.6f}, KL = {val_kl:.6f}, "
+              f"target-beta ELBO = {val_target:.6f}, active_dims = {active_dims})")
 
     if save_fig_dir:
         os.makedirs(save_fig_dir, exist_ok=True)
@@ -127,6 +152,15 @@ def fit_model(
         model_path = os.path.join(save_model_dir, f"{model_name}.pth")
         torch.save(model.state_dict(), model_path)
         print(f"[INFO] Model saved to: {model_path}")
+        if best_state is not None:
+            # The best-val checkpoint lives in a subdirectory so that the
+            # orchestrators' save/models globs never pick it up by accident.
+            best_dir = os.path.join(save_model_dir, "best")
+            os.makedirs(best_dir, exist_ok=True)
+            best_path = os.path.join(best_dir, f"{model_name}.pth")
+            torch.save(best_state, best_path)
+            print(f"[INFO] Best-val model (epoch {best_epoch}, "
+                  f"target-beta ELBO {best_val:.6f}) saved to: {best_path}")
 
     return model
 
@@ -199,8 +233,10 @@ def main():
     parser.add_argument(
         "--beta",
         type=float,
-        default=0.003,
-        help="Target weight of the KL term in the ELBO."
+        default=1.0,
+        help="KL weight in CANONICAL ELBO units (sum over data dims and latent "
+             "dims): beta=1 is the standard VAE. Internally rescaled by "
+             "1/(C*T) to match the mean-reduced reconstruction."
     )
     parser.add_argument(
         "--kl-anneal-epochs",
@@ -306,6 +342,9 @@ def main():
         print(f"Number of windows for pre-training after exclusion: {len(X_np)}")
 
     X = torch.tensor(X_np, dtype=torch.float32)
+    beta_effective = args.beta / (X.shape[1] * X.shape[2])
+    print(f"[INFO] Canonical beta {args.beta} -> code-scale beta "
+          f"{beta_effective:.4e} (C*T = {X.shape[1] * X.shape[2]})")
     print("EEG dimensions: ", X.shape)
 
     needs_cond = args.conditional or args.prior == "conditional"
@@ -369,7 +408,7 @@ def main():
         model=model,
         optimizer=optimizer,
         device=device,
-        target_beta=args.beta,
+        target_beta=beta_effective,
         anneal_epochs=args.kl_anneal_epochs,
         prior=prior,
         conditional=args.conditional,

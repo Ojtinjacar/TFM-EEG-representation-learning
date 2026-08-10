@@ -309,8 +309,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--beta",
         type=float,
-        default=0.003,
-        help="VAE/CVAE: target KL weight in the ELBO (default 0.003)."
+        default=1.0,
+        help="VAE/CVAE: KL weight in canonical ELBO units (beta=1 = standard "
+             "VAE; train_vae.py rescales internally)."
     )
     parser.add_argument(
         "--kl-anneal-epochs",

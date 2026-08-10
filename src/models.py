@@ -506,7 +506,10 @@ class VariationalAttentionLSTMAutoencoder(nn.Module):
 
     def encode_params(self, x):
         h, t_prime = self._pool_encode(x)
-        return self.fc_mu(h), self.fc_logvar(h), t_prime
+        # Clamp keeps exp(logvar) finite; the range is far wider than any
+        # useful posterior variance, so it only guards against blow-ups.
+        logvar = torch.clamp(self.fc_logvar(h), min=-10.0, max=10.0)
+        return self.fc_mu(h), logvar, t_prime
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -574,7 +577,8 @@ class ConditionalVariationalAttentionLSTMAutoencoder(nn.Module):
         h, t_prime = self._pool_encode(x)
         c = self._cond_vector(cond, x.size(0), x.device)
         h = torch.cat([h, c], dim=1)
-        return self.fc_mu(h), self.fc_logvar(h), t_prime
+        logvar = torch.clamp(self.fc_logvar(h), min=-10.0, max=10.0)
+        return self.fc_mu(h), logvar, t_prime
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)

@@ -180,4 +180,4 @@ def build_prior(prior_type, n_conditions=None, latent_dim=None):
 def kl_beta(epoch, target_beta, anneal_epochs):
     if anneal_epochs <= 0:
         return target_beta
-    return target_beta * min(1.0, (epoch + 1) / anneal_epochs)
+    return target_beta * min(1.0, epoch / anneal_epochs)

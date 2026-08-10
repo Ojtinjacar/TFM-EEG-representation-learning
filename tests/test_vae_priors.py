@@ -73,9 +73,29 @@ def test_build_prior_factory():
 
 
 def test_kl_beta_annealing():
-    assert kl_beta(0, 0.1, 10) == pytest.approx(0.01)
+    assert kl_beta(0, 0.1, 10) == 0.0
+    assert kl_beta(5, 0.1, 10) == pytest.approx(0.05)
+    assert kl_beta(10, 0.1, 10) == 0.1
     assert kl_beta(100, 0.1, 10) == 0.1
     assert kl_beta(5, 0.1, 0) == 0.1
+
+
+def test_canonical_beta_rescaling_matches_summed_elbo():
+    torch.manual_seed(0)
+    B_, C_, T_, J_ = 4, 3, 20, 8
+    x = torch.randn(B_, C_, T_)
+    recon = torch.randn(B_, C_, T_)
+    mu = torch.randn(B_, J_)
+    logvar = torch.randn(B_, J_) * 0.1
+    prior = StandardNormalPrior()
+    beta_canonical = 2.0
+
+    beta_code = beta_canonical / (C_ * T_)
+    total, _, kl = vae_elbo(recon, x, mu, logvar, prior, beta_code)
+
+    sum_mse_per_sample = ((recon - x) ** 2).sum() / B_
+    expected = sum_mse_per_sample + beta_canonical * kl
+    assert torch.isclose(total * (C_ * T_), expected, rtol=1e-5)
 
 
 def test_vae_forward_and_elbo_backward():

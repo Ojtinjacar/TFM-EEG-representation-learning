@@ -135,7 +135,7 @@ def config_data_paths(zone, frequency):
 VAE_FAMILY = ("VAE", "CVAE", "CVAE-SP")
 
 
-def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=0.003,
+def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=1.0,
                     vae_prior="standard", vae_free_bits=0.0, cvae_cond_dim=16, vae_conditional=False,
                     simclr_flags=None, simclr_tag="", allow_legacy=False, seed=42):
     simclr_flags = list(simclr_flags or [])
@@ -923,8 +923,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vae_beta",
         type=float,
-        default=0.003,
-        help="KL weight for the VAE pretraining (must match train_vae.py's beta formatting)."
+        default=1.0,
+        help="KL weight for the VAE pretraining in canonical ELBO units "
+             "(beta=1 is the standard VAE; train_vae.py rescales internally)."
     )
     parser.add_argument(
         "--vae_free_bits",
