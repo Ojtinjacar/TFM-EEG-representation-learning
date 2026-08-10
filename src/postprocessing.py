@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import argparse
+import json
 import os
 from mne.filter import filter_data
 
@@ -39,6 +40,8 @@ COLUMN_MAP = {
     "IQ_ICV_Perc_36mo": "icv_perc_36mo",
     "IQ_IVE_36mo": "ive_36mo",
     "IQ_IVE_Perc_36mo": "ive_perc_36mo",
+    # Known typo in the source spreadsheet ("362o" instead of "36mo").
+    "IQ_IVE_Perc_362o": "ive_perc_36mo",
     "IQ_IRF_36mo": "irf_36mo",
     "IQ_IRF_Perc_36mo": "irf_perc_36mo",
     "IQ_IMT_36mo": "imt_36mo",
@@ -90,6 +93,11 @@ def main(args):
     X = np.load(args.data_path)
     meta = pd.read_csv(args.meta_path)
     socio_meta = pd.read_csv(args.socio_path).rename(columns={"ID": "subject"} | COLUMN_MAP)
+    unmapped = [c for c in socio_meta.columns
+                if c.startswith(("IQ_", "IBQ_", "CBQ_", "Z_"))]
+    if unmapped:
+        print(f"[postprocessing][WARN] socio columns not covered by COLUMN_MAP "
+              f"(kept under their raw names): {unmapped}")
 
     # Merge both metadata dataframes
     meta = meta.merge(socio_meta, on="subject", how="left")
@@ -113,13 +121,27 @@ def main(args):
             verbose=True
         )
 
+    # Normalization statistics can exclude held-out subjects so that test data
+    # never contributes to the transform (train-only stats are then applied to
+    # every epoch, exactly like a scaler fitted on train and applied to test).
+    if args.fit_stats_excluding:
+        stats_mask = ~meta["subject"].isin(args.fit_stats_excluding).values
+        if not stats_mask.any():
+            raise ValueError("fit_stats_excluding removed every epoch; "
+                             "no data left to fit the normalization statistics.")
+        print(f"[postprocessing] Normalization stats fitted excluding "
+              f"{len(args.fit_stats_excluding)} subjects "
+              f"({int((~stats_mask).sum())} epochs held out of the fit).")
+    else:
+        stats_mask = np.ones(len(X), dtype=bool)
+
     if args.norm_mode == "per_channel":
-        mean_ch = X.mean(axis=(0, 2), keepdims=True)
-        std_ch = X.std(axis=(0, 2), keepdims=True)
+        mean_ch = X[stats_mask].mean(axis=(0, 2), keepdims=True)
+        std_ch = X[stats_mask].std(axis=(0, 2), keepdims=True)
         X = (X - mean_ch) / (std_ch + 1e-12)
     elif args.norm_mode == "global":
-        mean_g = X.mean()
-        std_g = X.std()
+        mean_g = X[stats_mask].mean()
+        std_g = X[stats_mask].std()
         X = (X - mean_g) / (std_g + 1e-12)
     elif args.norm_mode == "none":
         pass
@@ -134,7 +156,23 @@ def main(args):
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)
     np.save(os.path.join(args.output_path, "processed_windows.npy"), X_win)
-    meta_win.to_csv(os.path.join(args.output_path, "processed_metadata.csv"), index=False)  
+    meta_win.to_csv(os.path.join(args.output_path, "processed_metadata.csv"), index=False)
+
+    # Provenance manifest: without it there is no way to know afterwards which
+    # normalization/band/zones produced a processed directory.
+    manifest = {
+        "args": {k: (str(v) if isinstance(v, os.PathLike) else v)
+                 for k, v in vars(args).items()},
+        "input_file": os.path.abspath(args.data_path),
+        "input_size_bytes": os.path.getsize(args.data_path),
+        "input_mtime": os.path.getmtime(args.data_path),
+        "output_shape": list(X_win.shape),
+        "sfreq": SFREQ,
+    }
+    with open(os.path.join(args.output_path, "manifest.json"), "w") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+    print(f"[postprocessing] Manifest written to "
+          f"{os.path.join(args.output_path, 'manifest.json')}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -146,6 +184,14 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Path to the EEG data file."
+    )
+
+    parser.add_argument(
+        "--fit_stats_excluding",
+        nargs="*",
+        default=None,
+        help="Subject IDs excluded from the normalization statistics fit "
+             "(the transform is still applied to their epochs)."
     )
 
     parser.add_argument(
