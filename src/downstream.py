@@ -77,11 +77,24 @@ class FullModel(nn.Module):
     """
     Backbone + head for the final task.
     Uses backbone.get_embedding(x) as representation.
+
+    With ``freeze_backbone=True`` (linear probing) the backbone is pinned to
+    eval mode even when the full model trains: freezing only the parameters
+    would still leave dropout active and BatchNorm running statistics
+    updating with the probe data, so the evaluated embeddings would drift
+    away from the pretrained model.
     """
-    def __init__(self, backbone, head):
+    def __init__(self, backbone, head, freeze_backbone=False):
         super().__init__()
         self.backbone = backbone
         self.head = head
+        self.freeze_backbone = freeze_backbone
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze_backbone:
+            self.backbone.eval()
+        return self
 
     def forward(self, x):
         # The backbone is already frozen; no need for no_grad here
@@ -435,7 +448,10 @@ def main(args):
 
         # 2) Build full model and optionally freeze backbone
         head = Head(embedding_size, 1).to(device)
-        model = FullModel(backbone, head).to(device)
+        model = FullModel(
+            backbone, head,
+            freeze_backbone=(args.eval_mode == "linear_probe"),
+        ).to(device)
 
         if args.eval_mode == 'linear_probe': 
             for p in model.backbone.parameters():
