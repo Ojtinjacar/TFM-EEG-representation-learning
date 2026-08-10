@@ -31,7 +31,7 @@ def test_failed_experiment_does_not_crash_the_fold(monkeypatch, capsys):
 
     args = SimpleNamespace(
         zone="all", frequency="all", no_skip=False, allow_legacy=False,
-        base_seed=1234, cvae_cond_dim=16, vae_beta=1.0, vae_free_bits=0.0,
+        base_seed=1234, vae_beta=1.0, vae_free_bits=0.0,
         methods=["PCA"],
     )
     results = rd.execute_fold(

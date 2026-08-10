@@ -848,28 +848,6 @@ def compute_similarity_matrix(methods_dict):
 
     return sim_matrix.astype(float)
 
-CANONICAL_AGES = (6, 9, 16, 36)
-"""Tuple[int, ...]: Canonical session ages (months) used as CVAE conditions.
-
-Fixed and ordered so the condition index space is identical in training and
-downstream, guaranteeing that condition embeddings and conditional-prior tables
-keep matching shapes across runs.
-"""
-
-
-def ages_to_indices(ages):
-    lut = {age: i for i, age in enumerate(CANONICAL_AGES)}
-    indices = []
-    for a in ages:
-        key = int(round(float(a)))
-        if key not in lut:
-            raise ValueError(
-                f"Age {a!r} is not in the canonical ages {CANONICAL_AGES}."
-            )
-        indices.append(lut[key])
-    return np.array(indices, dtype=np.int64)
-
-
 def set_seed(seed):
     """Seeds the python, numpy and torch RNGs for reproducible training.
 
@@ -881,22 +859,13 @@ def set_seed(seed):
     torch.manual_seed(seed)
 
 
-def split_dataset(X, train_percentaje=0.8, cond=None, seed=None):
+def split_dataset(X, train_percentaje=0.8, seed=None):
     data = torch.tensor(X, dtype=torch.float32)  # (N, C, T)
 
     train_size = int(train_percentaje * X.shape[0])
     val_size = X.shape[0] - train_size
 
-    if cond is None:
-        dataset = TensorDataset(data, data)
-    else:
-        if len(cond) != X.shape[0]:
-            raise ValueError(
-                f"cond length ({len(cond)}) must match number of windows ({X.shape[0]})."
-            )
-        cond_tensor = torch.as_tensor(cond, dtype=torch.long)
-        dataset = TensorDataset(data, data, cond_tensor)
-
+    dataset = TensorDataset(data, data)
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
     return random_split(dataset, [train_size, val_size], generator=generator)
 

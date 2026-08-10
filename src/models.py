@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from loss import StandardNormalPrior, ConditionalGaussianPrior
+from loss import StandardNormalPrior
 
 class CNNAutoencoder(nn.Module):
     def __init__(self, input_size, hidden_size, n_channels=2, dropout=0.25):
@@ -527,76 +527,5 @@ class VariationalAttentionLSTMAutoencoder(nn.Module):
         h, _ = self._pool_encode(x)
         return self.fc_mu(h)
 
-    def kl(self, mu, logvar, cond=None, free_bits=0.0):
-        return self.prior.kl_divergence(mu, logvar, cond=cond, free_bits=free_bits)
-
-
-class ConditionalVariationalAttentionLSTMAutoencoder(nn.Module):
-    def __init__(self, input_size, hidden_size, n_conditions, n_channels=2, sfreq=100,
-                 lstm_hidden_size=64, lstm_layers=2, n_attention_heads=4,
-                 dropout=0.25, latent_dim=None, cond_dim=16, prior=None):
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        self.latent_dim = latent_dim if latent_dim is not None else hidden_size
-        self.n_conditions = n_conditions
-        self.cond_dim = cond_dim
-
-        self.backbone = AttentionLSTMAutoencoder(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            n_channels=n_channels,
-            sfreq=sfreq,
-            lstm_hidden_size=lstm_hidden_size,
-            lstm_layers=lstm_layers,
-            n_attention_heads=n_attention_heads,
-            dropout=dropout,
-        )
-
-        self.cond_embed = nn.Embedding(n_conditions, cond_dim)
-        self.fc_mu = nn.Linear(hidden_size + cond_dim, self.latent_dim)
-        self.fc_logvar = nn.Linear(hidden_size + cond_dim, self.latent_dim)
-        self.fc_expand = nn.Linear(self.latent_dim + cond_dim, hidden_size)
-
-        self.prior = prior if prior is not None else ConditionalGaussianPrior(
-            n_conditions, self.latent_dim
-        )
-
-    def _pool_encode(self, x):
-        h_seq = self.backbone.encode(x)
-        h = h_seq.mean(dim=1)
-        return h, h_seq.size(1)
-
-    def _cond_vector(self, cond, batch_size, device):
-        if cond is None:
-            neutral = self.cond_embed.weight.mean(dim=0, keepdim=True)
-            return neutral.to(device).expand(batch_size, -1)
-        return self.cond_embed(cond)
-
-    def encode_params(self, x, cond):
-        h, t_prime = self._pool_encode(x)
-        c = self._cond_vector(cond, x.size(0), x.device)
-        h = torch.cat([h, c], dim=1)
-        logvar = torch.clamp(self.fc_logvar(h), min=-10.0, max=10.0)
-        return self.fc_mu(h), logvar, t_prime
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + std * eps
-
-    def forward(self, x, cond):
-        mu, logvar, t_prime = self.encode_params(x, cond)
-        z = self.reparameterize(mu, logvar)
-        c = self._cond_vector(cond, x.size(0), x.device)
-        z_seq = self.fc_expand(torch.cat([z, c], dim=1)).unsqueeze(1).repeat(1, t_prime, 1)
-        reconstruction = self.backbone.decode(z_seq)
-        return reconstruction, mu, logvar, z
-
-    def get_embedding(self, x, cond=None):
-        h, _ = self._pool_encode(x)
-        c = self._cond_vector(cond, x.size(0), x.device)
-        return self.fc_mu(torch.cat([h, c], dim=1))
-
-    def kl(self, mu, logvar, cond=None, free_bits=0.0):
-        return self.prior.kl_divergence(mu, logvar, cond=cond, free_bits=free_bits)
+    def kl(self, mu, logvar, free_bits=0.0):
+        return self.prior.kl_divergence(mu, logvar, free_bits=free_bits)

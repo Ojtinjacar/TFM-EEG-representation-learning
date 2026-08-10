@@ -88,7 +88,7 @@ def main(args):
                     ]
                     subprocess.run(post_cmd, check=True, capture_output=True)
 
-                if args.method in ["SimCLR", "AE", "VAE", "CVAE"]:
+                if args.method in ["SimCLR", "AE", "VAE"]:
                     # --- 2. Backbone Training ---
                     print(f"  [2/4] Training {args.method} model for {run_id}...")
                     if args.method == "SimCLR":
@@ -125,7 +125,7 @@ def main(args):
                             "--seed", str(1000 + i),
                             "--exclude_subjects", *[str(s) for s in test_subjects],
                         ]
-                    elif args.method in ["VAE", "CVAE"]:
+                    elif args.method == "VAE":
                         train_script = "src/train_vae.py"
                         train_cmd = [
                             "python", train_script,
@@ -142,11 +142,6 @@ def main(args):
                             "--kl-anneal-epochs", str(args.kl_anneal_epochs),
                             "--free-bits", str(args.free_bits),
                         ]
-                        if args.method == "CVAE":
-                            train_cmd += ["--conditional", "--cond-dim", str(args.cond_dim),
-                                          "--prior", "conditional"]
-                        else:
-                            train_cmd += ["--prior", args.prior]
                         train_cmd += ["--exclude_subjects", *[str(s) for s in test_subjects]]
 
                     subprocess.run(train_cmd, check=True, capture_output=True)
@@ -279,7 +274,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "VAE", "CVAE", "supervised"],
+        choices=["SimCLR", "AE", "VAE", "supervised"],
         required=True,
         help="Pre-training method to use"
     )
@@ -318,33 +313,20 @@ if __name__ == "__main__":
         "--beta",
         type=float,
         default=1.0,
-        help="VAE/CVAE: KL weight in canonical ELBO units (beta=1 = standard "
+        help="VAE: KL weight in canonical ELBO units (beta=1 = standard "
              "VAE; train_vae.py rescales internally)."
     )
     parser.add_argument(
         "--kl-anneal-epochs",
         type=int,
         default=20,
-        help="VAE/CVAE: epochs to linearly ramp beta from 0 (0 disables annealing)."
+        help="VAE: epochs to linearly ramp beta from 0 (0 disables annealing)."
     )
     parser.add_argument(
         "--free-bits",
         type=float,
         default=0.0,
-        help="VAE/CVAE: per-dimension KL floor (nats)."
-    )
-    parser.add_argument(
-        "--prior",
-        type=str,
-        default="standard",
-        choices=["standard", "conditional"],
-        help="VAE/CVAE latent prior: 'standard' N(0,I) or 'conditional' per-age Gaussian."
-    )
-    parser.add_argument(
-        "--cond-dim",
-        type=int,
-        default=16,
-        help="CVAE: width of the learned session-age condition embedding."
+        help="VAE: per-dimension KL floor (nats)."
     )
     parser.add_argument(
         "--norm_mode",

@@ -120,7 +120,7 @@ def _apply_free_bits(kl_per_dim, free_bits):
 
 
 class LatentPrior:
-    def kl_divergence(self, mu, logvar, cond=None, free_bits=0.0):
+    def kl_divergence(self, mu, logvar, free_bits=0.0):
         raise NotImplementedError
 
     def to(self, *args, **kwargs):
@@ -128,53 +128,23 @@ class LatentPrior:
 
 
 class StandardNormalPrior(LatentPrior):
-    def kl_divergence(self, mu, logvar, cond=None, free_bits=0.0):
+    def kl_divergence(self, mu, logvar, free_bits=0.0):
         kl_per_dim = 0.5 * (mu.pow(2) + logvar.exp() - 1.0 - logvar)
         kl_per_dim = _apply_free_bits(kl_per_dim, free_bits)
         return kl_per_dim.sum(dim=1).mean()
 
 
-class ConditionalGaussianPrior(nn.Module, LatentPrior):
-    def __init__(self, n_conditions, latent_dim):
-        super().__init__()
-        self.mu_table = nn.Embedding(n_conditions, latent_dim)
-        self.logvar_table = nn.Embedding(n_conditions, latent_dim)
-        nn.init.zeros_(self.mu_table.weight)
-        nn.init.zeros_(self.logvar_table.weight)
-
-    def kl_divergence(self, mu, logvar, cond=None, free_bits=0.0):
-        if cond is None:
-            raise ValueError(
-                "ConditionalGaussianPrior requires `cond` (condition indices)."
-            )
-        mu_c = self.mu_table(cond)
-        logvar_c = self.logvar_table(cond)
-        kl_per_dim = 0.5 * (
-            logvar_c - logvar
-            + (logvar.exp() + (mu - mu_c).pow(2)) / logvar_c.exp()
-            - 1.0
-        )
-        kl_per_dim = _apply_free_bits(kl_per_dim, free_bits)
-        return kl_per_dim.sum(dim=1).mean()
-
-
-def vae_elbo(reconstruction, x, mu, logvar, prior, beta, cond=None, free_bits=0.0):
+def vae_elbo(reconstruction, x, mu, logvar, prior, beta, free_bits=0.0):
     recon = F.mse_loss(reconstruction, x, reduction="mean")
-    kl = prior.kl_divergence(mu, logvar, cond=cond, free_bits=free_bits)
+    kl = prior.kl_divergence(mu, logvar, free_bits=free_bits)
     total = recon + beta * kl
     return total, recon, kl
 
 
-def build_prior(prior_type, n_conditions=None, latent_dim=None):
+def build_prior(prior_type):
     if prior_type == "standard":
         return StandardNormalPrior()
-    if prior_type == "conditional":
-        if n_conditions is None or latent_dim is None:
-            raise ValueError(
-                "ConditionalGaussianPrior requires n_conditions and latent_dim."
-            )
-        return ConditionalGaussianPrior(n_conditions, latent_dim)
-    raise ValueError(f"Unknown prior_type: {prior_type!r} (use 'standard' or 'conditional').")
+    raise ValueError(f"Unknown prior_type: {prior_type!r} (use 'standard').")
 
 
 def kl_beta(epoch, target_beta, anneal_epochs):

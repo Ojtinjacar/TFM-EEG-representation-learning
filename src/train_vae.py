@@ -8,19 +8,10 @@ import matplotlib.pyplot as plt
 import torch
 from torch.optim.lr_scheduler import OneCycleLR
 
-from models import (
-    VariationalAttentionLSTMAutoencoder,
-    ConditionalVariationalAttentionLSTMAutoencoder,
-)
+from models import VariationalAttentionLSTMAutoencoder
 from checkpoint_naming import vae_checkpoint_name, write_sidecar
-from utils import split_dataset, create_dataloader, ages_to_indices, CANONICAL_AGES, set_seed
+from utils import split_dataset, create_dataloader, set_seed
 from loss import build_prior, vae_elbo, kl_beta
-
-
-def _unpack_batch(batch, device):
-    x_batch = batch[0].to(device)
-    cond = batch[2].to(device) if len(batch) == 3 else None
-    return x_batch, cond
 
 
 def fit_model(
@@ -33,7 +24,6 @@ def fit_model(
     target_beta,
     anneal_epochs,
     prior,
-    conditional=False,
     free_bits=0.0,
     model_name="model",
     save_model_dir=None,
@@ -60,15 +50,12 @@ def fit_model(
 
         model.train()
         train_loss, train_recon, train_kl = 0.0, 0.0, 0.0
-        for batch in train_loader:
-            x_batch, c_batch = _unpack_batch(batch, device)
-            if conditional:
-                reconstruction, mu, logvar, _ = model(x_batch, c_batch)
-            else:
-                reconstruction, mu, logvar, _ = model(x_batch)
+        for x_batch, _ in train_loader:
+            x_batch = x_batch.to(device)
+            reconstruction, mu, logvar, _ = model(x_batch)
             loss, recon, kl = vae_elbo(
                 reconstruction, x_batch, mu, logvar, prior, beta,
-                cond=c_batch, free_bits=free_bits,
+                free_bits=free_bits,
             )
             optimizer.zero_grad()
             loss.backward()
@@ -89,15 +76,12 @@ def fit_model(
         val_loss, val_recon, val_kl = 0.0, 0.0, 0.0
         val_mus = []
         with torch.no_grad():
-            for batch in val_loader:
-                x_batch, c_batch = _unpack_batch(batch, device)
-                if conditional:
-                    reconstruction, mu, logvar, _ = model(x_batch, c_batch)
-                else:
-                    reconstruction, mu, logvar, _ = model(x_batch)
+            for x_batch, _ in val_loader:
+                x_batch = x_batch.to(device)
+                reconstruction, mu, logvar, _ = model(x_batch)
                 loss, recon, kl = vae_elbo(
                     reconstruction, x_batch, mu, logvar, prior, beta,
-                    cond=c_batch, free_bits=free_bits,
+                    free_bits=free_bits,
                 )
                 bs = x_batch.size(0)
                 val_loss += loss.item() * bs
@@ -275,36 +259,10 @@ def main():
         help="Per-dimension KL floor (nats). 0 disables it."
     )
     parser.add_argument(
-        "--conditional",
-        action="store_true",
-        help="Train a conditional VAE (CVAE) conditioned on the session age."
-    )
-    parser.add_argument(
-        "--prior",
-        type=str,
-        default="standard",
-        choices=["standard", "conditional"],
-        help="Latent prior: 'standard' N(0,I) or 'conditional' per-age Gaussian (rich prior)."
-    )
-    parser.add_argument(
-        "--cond-col",
-        type=str,
-        default="age",
-        help="Metadata column holding the per-window session age used as CVAE condition."
-    )
-    parser.add_argument(
-        "--cond-dim",
-        type=int,
-        default=16,
-        help="Width of the learned condition (age) embedding in the CVAE."
-    )
-    parser.add_argument(
         "--tag",
         type=str,
         default=None,
-        help="Optional label prefix for the checkpoint filename (e.g. 'CVAE-SP'). "
-             "Defaults to 'CVAE' when --conditional else 'VAE'. Lets ablation variants "
-             "(same architecture, different prior) get distinct, comparable checkpoints."
+        help="Optional label prefix for the checkpoint filename. Defaults to 'VAE'."
     )
 
     parser.add_argument(
@@ -347,56 +305,29 @@ def main():
           f"{beta_effective:.4e} (C*T = {X.shape[1] * X.shape[2]})")
     print("EEG dimensions: ", X.shape)
 
-    needs_cond = args.conditional or args.prior == "conditional"
-    cond = None
-    n_conditions = len(CANONICAL_AGES)
-    if needs_cond:
-        if args.cond_col not in meta_df.columns:
-            raise ValueError(
-                f"Condition column '{args.cond_col}' not found in metadata "
-                f"({args.meta_path}). Available: {list(meta_df.columns)}"
-            )
-        cond = ages_to_indices(meta_df[args.cond_col].values)
-        print(f"[INFO] Conditioning on '{args.cond_col}' with {n_conditions} ages "
-              f"{CANONICAL_AGES}.")
-
-    train_data, val_data = split_dataset(X, cond=cond, seed=args.seed)
+    train_data, val_data = split_dataset(X, seed=args.seed)
     train_loader, val_loader = create_dataloader(
         train_data, val_data, batch_size=args.batch_size, seed=args.seed
     )
 
-    latent_dim = args.hidden_size
-    prior = build_prior(args.prior, n_conditions=n_conditions, latent_dim=latent_dim).to(device)
+    prior = build_prior("standard").to(device)
 
-    print(f"[INFO] Creating the {'CVAE' if args.conditional else 'VAE'} model "
-          f"(prior={args.prior}, free_bits={args.free_bits})...")
-    if args.conditional:
-        model = ConditionalVariationalAttentionLSTMAutoencoder(
-            input_size=X.shape[2],
-            hidden_size=args.hidden_size,
-            n_conditions=n_conditions,
-            n_channels=X.shape[1],
-            sfreq=args.sampling_freq,
-            lstm_hidden_size=args.hidden_size // 2,
-            cond_dim=args.cond_dim,
-            prior=prior,
-        ).to(device)
-    else:
-        model = VariationalAttentionLSTMAutoencoder(
-            input_size=X.shape[2],
-            hidden_size=args.hidden_size,
-            n_channels=X.shape[1],
-            sfreq=args.sampling_freq,
-            lstm_hidden_size=args.hidden_size // 2,
-            prior=prior,
-        ).to(device)
+    print(f"[INFO] Creating the VAE model (free_bits={args.free_bits})...")
+    model = VariationalAttentionLSTMAutoencoder(
+        input_size=X.shape[2],
+        hidden_size=args.hidden_size,
+        n_channels=X.shape[1],
+        sfreq=args.sampling_freq,
+        lstm_hidden_size=args.hidden_size // 2,
+        prior=prior,
+    ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    method_tag = args.tag if args.tag else ("CVAE" if args.conditional else "VAE")
+    method_tag = args.tag if args.tag else "VAE"
     model_name = vae_checkpoint_name(
         method_tag, args.zone, args.frequency, args.fold_id,
-        beta=args.beta, prior=args.prior, free_bits=args.free_bits,
+        beta=args.beta, prior="standard", free_bits=args.free_bits,
         hidden_size=args.hidden_size, epochs=args.epochs,
     )[:-len(".pth")]
 
@@ -411,7 +342,6 @@ def main():
         target_beta=beta_effective,
         anneal_epochs=args.kl_anneal_epochs,
         prior=prior,
-        conditional=args.conditional,
         free_bits=args.free_bits,
         model_name=model_name,
         save_model_dir=args.save_model_dir,
@@ -429,10 +359,8 @@ def main():
             "seed": getattr(args, "seed", None),
             "hidden_size": args.hidden_size,
             "beta": args.beta,
-            "prior": args.prior,
+            "prior": "standard",
             "free_bits": args.free_bits,
-            "conditional": bool(args.conditional),
-            "cond_dim": args.cond_dim if args.conditional else None,
             "kl_anneal_epochs": args.kl_anneal_epochs,
             "epochs": args.epochs,
             "lr": args.lr,

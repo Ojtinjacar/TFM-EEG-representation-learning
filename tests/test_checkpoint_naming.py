@@ -60,12 +60,6 @@ def test_vae_name_contract():
     ) == "VAE_all_all_fold0_hidden128_beta0.003_priorstandard_fb0.0_e100.pth"
 
 
-def test_cvae_name_contract():
-    assert vae_checkpoint_name(
-        "CVAE-SP", "all", "all", "fold9", beta=0.003, prior="standard", free_bits=0.0
-    ) == "CVAE-SP_all_all_fold9_hidden128_beta0.003_priorstandard_fb0.0_e100.pth"
-
-
 def test_expclr_name_contract():
     assert expclr_checkpoint_name(
         "all", "all", "fold0", "P_full", batch_size=64, lr=0.005,

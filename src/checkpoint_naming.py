@@ -70,12 +70,12 @@ def vae_checkpoint_name(tag, zone, frequency, fold_id, beta, prior, free_bits,
     """Returns the VAE-family checkpoint filename.
 
     Args:
-        tag (str): Method tag ("VAE", "CVAE" or "CVAE-SP").
+        tag (str): Method tag (normally "VAE").
         zone (str): Head zone of the processed data.
         frequency (str): Frequency band of the processed data.
         fold_id (str | None): Fold identifier.
         beta (float): KL weight exactly as passed on the CLI.
-        prior (str): Latent prior name ("standard" | "conditional").
+        prior (str): Latent prior name ("standard").
         free_bits (float): Per-dimension KL floor.
         hidden_size (int): Encoder width and latent size.
         epochs (int): Training epochs.

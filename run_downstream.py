@@ -24,8 +24,8 @@ from checkpoint_naming import (
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
-LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
-FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP", "ExpCLR"]
+LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR"]
+FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR"]
 
 EXPCLR_DESCRIPTOR = "P_full"
 EXPCLR_BATCH_SIZE = 64
@@ -133,12 +133,9 @@ def config_data_paths(zone, frequency):
             os.path.join(cfg_dir, "processed_metadata.csv"))
 
 
-VAE_FAMILY = ("VAE", "CVAE", "CVAE-SP")
-
-
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False, vae_beta=1.0,
-                    vae_prior="standard", vae_free_bits=0.0, cvae_cond_dim=16, vae_conditional=False,
-                    simclr_flags=None, simclr_tag="", allow_legacy=False, seed=42):
+                    vae_free_bits=0.0, simclr_flags=None, simclr_tag="",
+                    allow_legacy=False, seed=42):
     simclr_flags = list(simclr_flags or [])
     if method in ["PCA", "supervised"]:
         # These methods do not require pre-training
@@ -182,26 +179,25 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     elif method == "TripletLoss":
         model_filename = triplet_checkpoint_name(target, zone, frequency, fold_id)
         expected.update({"method": "TripletLoss", "fold_id": fold_id, "target": target})
-    elif method in VAE_FAMILY:
+    elif method == "VAE":
         model_filename = vae_checkpoint_name(
             method, zone, frequency, fold_id,
-            beta=vae_beta, prior=vae_prior, free_bits=vae_free_bits,
+            beta=vae_beta, prior="standard", free_bits=vae_free_bits,
         )
         expected.update({
             "method": method,
             "fold_id": fold_id,
             "beta": vae_beta,
-            "prior": vae_prior,
+            "prior": "standard",
             "free_bits": vae_free_bits,
-            "conditional": bool(vae_conditional),
             "lr": 1e-3,
         })
         if allow_legacy:
-            # Legacy VAE-family checkpoints are provably collapsed AND their
-            # filename beta is in the pre-F1 code scale: same name, different
-            # objective. Never reuse them.
+            # Legacy VAE checkpoints are provably collapsed AND their filename
+            # beta is in the pre-F1 code scale: same name, different objective.
+            # Never reuse them.
             print(f"  > [REUSE] {method}: legacy reuse disabled for the VAE "
-                  f"family (collapsed checkpoints, incompatible beta scale).")
+                  f"(collapsed checkpoints, incompatible beta scale).")
             allow_legacy = False
     elif method in EXPCLR_VARIANTS:
         delta, lr, tau, _ = expclr_hparams(method)
@@ -279,7 +275,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--sim_max", sim_max,
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
-    elif method in VAE_FAMILY:
+    elif method == "VAE":
         command = [
             "python", "src/train_vae.py",
             "--zone", zone,
@@ -289,17 +285,14 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
 
-    if method in ("AE", "MAE") or method in VAE_FAMILY:
+    if method in ("AE", "MAE", "VAE"):
         win_path, meta_path = config_data_paths(zone, frequency)
         command += ["--data-path", win_path, "--meta-path", meta_path]
-    if method in VAE_FAMILY:
+    if method == "VAE":
         command += [
             "--beta", str(vae_beta),
-            "--prior", vae_prior,
             "--free-bits", str(vae_free_bits),
         ]
-    if vae_conditional:
-        command += ["--conditional", "--cond-dim", str(cvae_cond_dim)]
 
     command += ["--seed", str(eff_seed)]
 
@@ -330,7 +323,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"STDERR: {e.stderr}")
         return None
 
-def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None, cond_dim=16):
+def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None):
     win_path, meta_path = config_data_paths(zone, frequency)
     command = [
         "python", "src/downstream.py",
@@ -347,9 +340,6 @@ def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_
     # PCA/supervised have model_path=None
     if model_path is not None:
         command.extend(["--model_path", model_path])
-
-    if (downstream_method or method) == "CVAE":
-        command.extend(["--cond-dim", str(cond_dim)])
 
     if test_subjects:
         command.extend(["--test_subjects"] + [str(s) for s in test_subjects])
@@ -463,37 +453,10 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         pretrained_models["VAE"] = run_pretraining(
             method="VAE", target=None, zone=args.zone, frequency=args.frequency,
             test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
-            vae_beta=args.vae_beta, vae_prior="standard", vae_free_bits=args.vae_free_bits,
-            vae_conditional=False,
+            vae_beta=args.vae_beta, vae_free_bits=args.vae_free_bits,
         )
     else:
         pretrained_models["VAE"] = None
-
-    if _use("CVAE"):
-        print(f"\n  Pre-training CVAE (age-conditioned, conditional/rich prior, "
-              f"beta={args.vae_beta})...", flush=True)
-        pretrained_models["CVAE"] = run_pretraining(
-            method="CVAE", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
-            vae_beta=args.vae_beta, vae_prior="conditional",
-            vae_free_bits=args.vae_free_bits, cvae_cond_dim=args.cvae_cond_dim,
-            vae_conditional=True,
-        )
-    else:
-        pretrained_models["CVAE"] = None
-
-    if _use("CVAE-SP"):
-        print(f"\n  Pre-training CVAE-SP (age-conditioned, standard prior, "
-              f"beta={args.vae_beta})...", flush=True)
-        pretrained_models["CVAE-SP"] = run_pretraining(
-            method="CVAE-SP", target=None, zone=args.zone, frequency=args.frequency,
-            test_subjects=test_subjects, fold_id=fold_id, no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
-            vae_beta=args.vae_beta, vae_prior="standard",
-            vae_free_bits=args.vae_free_bits, cvae_cond_dim=args.cvae_cond_dim,
-            vae_conditional=True,
-        )
-    else:
-        pretrained_models["CVAE-SP"] = None
 
     for variant in expclr_variants:
         print(f"\n  Pre-training {variant} (descriptor={EXPCLR_VARIANTS[variant]['descriptor']}, "
@@ -563,11 +526,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path = pretrained_models["MAE"]
                 elif method == "VAE":
                     model_path = pretrained_models["VAE"]
-                elif method == "CVAE":
-                    model_path = pretrained_models["CVAE"]
-                elif method == "CVAE-SP":
-                    model_path = pretrained_models["CVAE-SP"]
-                    downstream_method = "CVAE"
                 elif method in EXPCLR_VARIANTS:
                     model_path = pretrained_models.get(method)
                     downstream_method = "ExpCLR"
@@ -593,7 +551,6 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     test_subjects=valid_test_subjects,
                     fold_id=fold_id,
                     downstream_method=downstream_method,
-                    cond_dim=args.cvae_cond_dim,
                 )
 
                 if subject_avgs:
@@ -955,13 +912,7 @@ if __name__ == "__main__":
         "--vae_free_bits",
         type=float,
         default=0.0,
-        help="Per-dimension KL floor (nats) for VAE/CVAE pretraining."
-    )
-    parser.add_argument(
-        "--cvae_cond_dim",
-        type=int,
-        default=16,
-        help="Width of the CVAE session-age condition embedding (train and eval must match)."
+        help="Per-dimension KL floor (nats) for VAE pretraining."
     )
     parser.add_argument(
         "--simclr_variants",

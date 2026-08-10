@@ -33,7 +33,6 @@ from models import (
     AttentionLSTMAutoencoder,
     MaskedAttentionLSTMAutoencoder,
     VariationalAttentionLSTMAutoencoder,
-    ConditionalVariationalAttentionLSTMAutoencoder,
 )
 from utils import (
     found_k_clusters,
@@ -42,11 +41,10 @@ from utils import (
     visualization_emb_by_label,
     compute_clustering_metrics,
     compute_similarity_matrix,
-    CANONICAL_AGES,
 )
 
 # Available methods
-AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "CVAE", "CVAE-SP"]
+AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 
 
 def get_model_path(method, zone, frequency, target=None, save_model_dir="save/models"):
@@ -63,7 +61,7 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
         if target is None:
             raise ValueError("TripletLoss requires a target to be specified")
         filename = f"Triplet_{target}_{zone}_{frequency}_emb128_m0.4.pth"
-    elif method in ("VAE", "CVAE", "CVAE-SP"):
+    elif method == "VAE":
         pattern = os.path.join(save_model_dir, f"{method}_{zone}_{frequency}*.pth")
         matches = glob.glob(pattern)
         if not matches:
@@ -76,7 +74,7 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
 
 
 def load_model(method, model_path, input_size, n_channels, hidden_size=128,
-               sfreq=250, device=None, cond_dim=16):
+               sfreq=250, device=None):
     if method == "SimCLR" or method == "TripletLoss":
         model = EnhancedAttentionLSTM(
             input_size=input_size,
@@ -109,27 +107,12 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
             sfreq=sfreq,
             lstm_hidden_size=hidden_size // 2
         )
-    elif method in ("CVAE", "CVAE-SP"):
-        model = ConditionalVariationalAttentionLSTMAutoencoder(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            n_conditions=len(CANONICAL_AGES),
-            n_channels=n_channels,
-            sfreq=sfreq,
-            lstm_hidden_size=hidden_size // 2,
-            cond_dim=cond_dim,
-        )
     else:
         raise ValueError(f"Unknown method for model loading: {method}")
 
-    state_dict = torch.load(model_path, map_location=device)
-    if method in ("VAE", "CVAE", "CVAE-SP"):
-        # Learnable-prior parameters are training-only; drop them and load the
-        # backbone strictly so a wrong checkpoint fails instead of silently
-        # producing random-weight embeddings.
-        state_dict = {k: v for k, v in state_dict.items()
-                      if not k.startswith("prior.")}
-    model.load_state_dict(state_dict, strict=True)
+    model.load_state_dict(
+        torch.load(model_path, map_location=device), strict=True
+    )
     model.to(device)
     model.eval()
 
@@ -137,7 +120,7 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
 
 
 def extract_representations(X, method, model_path=None, hidden_size=128,
-                           sfreq=250, batch_size=128, device=None, cond_dim=16):
+                           sfreq=250, batch_size=128, device=None):
     """
     Extracts representations using the specified method.
 
@@ -171,7 +154,6 @@ def extract_representations(X, method, model_path=None, hidden_size=128,
         hidden_size=hidden_size,
         sfreq=sfreq,
         device=device,
-        cond_dim=cond_dim,
     )
     emb = infer_embeddings_in_batches(model, X, batch_size=batch_size, device=device)
     norm = np.linalg.norm(emb, axis=1, keepdims=True)
@@ -566,12 +548,6 @@ def main():
         help="Sampling frequency.",
     )
     parser.add_argument(
-        "--cond-dim",
-        type=int,
-        default=16,
-        help="CVAE/CVAE-SP condition-embedding width (must match training).",
-    )
-    parser.add_argument(
         "--batch-size",
         type=int,
         default=128,
@@ -664,7 +640,6 @@ def main():
                     sfreq=args.sampling_freq,
                     batch_size=args.batch_size,
                     device=device,
-                    cond_dim=args.cond_dim,
                 )
                 print(f"  Representations shape: {representations.shape}", flush=True)
             except Exception as e:
