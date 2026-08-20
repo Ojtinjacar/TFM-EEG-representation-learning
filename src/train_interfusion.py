@@ -140,6 +140,9 @@ def main():
                              "(paper: 2 1 2 1 2 for W=100).")
     parser.add_argument("--flow-levels", type=int, default=20,
                         help="RealNVP levels on q(z1) (paper: 20).")
+    parser.add_argument("--free-bits", type=float, default=0.0,
+                        help="Per-element KL floor (nats) on z1. 0 disables it "
+                             "and keeps the paper's plain SGVB objective.")
     parser.add_argument("--pretrain-epochs", type=int, default=20,
                         help="Stage-1 (z2-only VAE) epochs (paper: 20).")
     parser.add_argument("--epochs", type=int, default=20,
@@ -198,6 +201,7 @@ def main():
         x_dim=X.shape[1], window=X.shape[2], z_dim=args.z_dim,
         strides=tuple(args.strides), rnn_hidden=args.rnn_hidden,
         dense_hidden=args.dense_hidden, flow_levels=args.flow_levels,
+        free_bits=args.free_bits,
     ).to(device)
     print(f"[INFO] InterFusion: M={X.shape[1]}, W={X.shape[2]}, "
           f"M'={args.z_dim}, W'={model.w_prime}, "
@@ -253,6 +257,7 @@ def main():
             "dense_hidden": args.dense_hidden,
             "strides": list(args.strides),
             "flow_levels": args.flow_levels,
+            "free_bits": args.free_bits,
             "pretrain_epochs": args.pretrain_epochs,
             "epochs": args.epochs,
             "lr": args.lr,

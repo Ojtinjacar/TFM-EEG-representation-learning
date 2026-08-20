@@ -59,6 +59,39 @@ def test_elbo_finite_and_backward(model):
     assert grads and all(torch.isfinite(g).all() for g in grads)
 
 
+def test_free_bits_defaults_to_the_plain_sgvb_objective():
+    """free_bits=0 must leave the paper's objective bit-identical."""
+    kwargs = dict(x_dim=M, window=W, z_dim=3, strides=(2, 1, 2, 1, 2),
+                  rnn_hidden=16, dense_hidden=16, flow_levels=3)
+    x = torch.randn(B, M, W)
+
+    torch.manual_seed(1)
+    plain = InterFusionEEG(**kwargs)(x)["loss"]
+    torch.manual_seed(1)
+    floored = InterFusionEEG(free_bits=0.0, **kwargs)(x)["loss"]
+
+    assert torch.equal(plain, floored)
+
+
+def test_free_bits_raises_the_loss_and_stays_differentiable():
+    """A positive floor can only add KL cost, never remove it."""
+    kwargs = dict(x_dim=M, window=W, z_dim=3, strides=(2, 1, 2, 1, 2),
+                  rnn_hidden=16, dense_hidden=16, flow_levels=3)
+    x = torch.randn(B, M, W)
+
+    torch.manual_seed(2)
+    baseline = InterFusionEEG(**kwargs)(x)["loss"]
+    torch.manual_seed(2)
+    model = InterFusionEEG(free_bits=0.5, **kwargs)
+    out = model(x)
+
+    assert torch.isfinite(out["loss"])
+    assert out["loss"] >= baseline - 1e-4
+    out["loss"].backward()
+    grads = [p.grad for p in model.parameters() if p.grad is not None]
+    assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
 def test_embedding_shape_and_determinism(model):
     x = torch.randn(B, M, W)
     e1 = model.get_embedding(x)

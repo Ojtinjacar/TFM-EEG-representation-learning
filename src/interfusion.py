@@ -289,14 +289,19 @@ class InterFusionEEG(nn.Module):
         rnn_hidden (int): Hidden units of the backward GRU (paper: 500).
         dense_hidden (int): Units of the feature/fusion dense layers (500).
         flow_levels (int): RealNVP levels on q(z1) (paper: 20).
+        free_bits (float): Per-element KL floor (nats) on z1. 0 keeps the
+            paper's plain SGVB objective; a positive value is a documented
+            deviation used to counter posterior collapse of z1.
     """
 
     def __init__(self, x_dim, window, z_dim=4, strides=(2, 1, 2, 1, 2, 2, 2),
-                 rnn_hidden=500, dense_hidden=500, flow_levels=20):
+                 rnn_hidden=500, dense_hidden=500, flow_levels=20,
+                 free_bits=0.0):
         super().__init__()
         self.x_dim = x_dim
         self.window = window
         self.z_dim = z_dim
+        self.free_bits = free_bits
 
         self.encoder = ConvStack(x_dim, strides)
         lengths = self.encoder.output_lengths(window)
@@ -392,13 +397,17 @@ class InterFusionEEG(nn.Module):
         # SAME module instance decodes z2, so both terms cancel in the ELBO.
         d = self.decoder(z2)
 
-        # q(z1 | d): sequential base sample + RealNVP
+        # q(z1 | d): sequential base sample + RealNVP. The per-element base
+        # term is kept so free bits can floor the KL dimension by dimension.
         a_seq = self._arnn_features(d)
         z1_base, _, _ = self.qz1.sample(a_seq)
-        logqz1 = self.qz1.log_prob(z1_base, a_seq).sum(dim=(1, 2))
+        logqz1_elem = self.qz1.log_prob(z1_base, a_seq)     # (B, W, z_dim)
+        logqz1 = logqz1_elem.sum(dim=(1, 2))
+        log_det_sum = None
         if self.posterior_flow is not None:
             z1, log_det = self.posterior_flow(z1_base)
-            logqz1 = logqz1 - log_det.sum(dim=1)
+            log_det_sum = log_det.sum(dim=1)
+            logqz1 = logqz1 - log_det_sum
         else:
             z1 = z1_base
 
@@ -407,19 +416,36 @@ class InterFusionEEG(nn.Module):
             z2, torch.zeros_like(z2), torch.zeros_like(z2)
         ).sum(dim=(1, 2))
         e_seq_cond = d.permute(0, 2, 1)  # e == d (shared decode of z2)
-        logpz1 = self.pz1.log_prob(z1, e_seq_cond).sum(dim=(1, 2))
+        logpz1_elem = self.pz1.log_prob(z1, e_seq_cond)     # (B, W, z_dim)
+        logpz1 = logpz1_elem.sum(dim=(1, 2))
 
         # likelihood
         x_mean, x_logstd = self.decode_x(z1, d)
         logpx = gaussian_log_prob(x, x_mean, x_logstd).sum(dim=(1, 2))
 
-        elbo = logpx + logpz1 + logpz2 - logqz1 - logqz2
+        kl_z1 = logqz1 - logpz1
+        kl_z2 = logqz2 - logpz2
+
+        if self.free_bits > 0.0:
+            # Floor the per-element KL of z1 before summing, as the VAE does
+            # in loss._apply_free_bits. The flow's log-det is (B, W), i.e. per
+            # timestep and not attributable to a latent dimension, so it stays
+            # outside the clamp: the floor acts on the base posterior term.
+            kl_z1_fb = torch.clamp(
+                logqz1_elem - logpz1_elem, min=self.free_bits
+            ).sum(dim=(1, 2))
+            if log_det_sum is not None:
+                kl_z1_fb = kl_z1_fb - log_det_sum
+            loss = -(logpx - kl_z1_fb - kl_z2).mean()
+        else:
+            loss = -(logpx + logpz1 + logpz2 - logqz1 - logqz2).mean()
+
         return {
-            "loss": -elbo.mean(),
+            "loss": loss,
             "recons": logpx.mean(),
-            "kl": (logqz1 + logqz2 - logpz1 - logpz2).mean(),
-            "kl_z1": (logqz1 - logpz1).mean(),
-            "kl_z2": (logqz2 - logpz2).mean(),
+            "kl": (kl_z1 + kl_z2).mean(),
+            "kl_z1": kl_z1.mean(),
+            "kl_z2": kl_z2.mean(),
             "x_mean": x_mean,
         }
 
