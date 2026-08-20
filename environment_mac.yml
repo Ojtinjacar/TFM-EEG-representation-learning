@@ -1,0 +1,45 @@
+name: dasci-cimcyc
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  # Core científico
+  - numpy>=2.0,<3.0
+  - pandas>=2.2,<3.0
+  - scipy>=1.15,<2.0
+  - scikit-learn>=1.6,<2.0
+  # Visualización
+  - matplotlib>=3.10,<4.0
+  - seaborn>=0.13,<0.14
+  # PyTorch (MPS — GPU Apple Silicon, sin CUDA)
+  - pytorch>=2.5.1
+  - torchvision>=0.20.0
+  - torchaudio>=2.5.1
+  # EEG
+  - mne>=1.9,<2.0
+  # Jupyter
+  - jupyterlab>=4.0
+  - ipykernel>=7.0
+  - nbformat>=5.10,<6.0
+  # Visualización / reducción de dimensionalidad
+  - umap-learn>=0.5.6,<0.6
+  # Utilidades
+  - tqdm>=4.67
+  - pyyaml>=6.0
+  - pip
+  - pip:
+    # Análisis espectral aperiódico (FOOOF moderno)
+    - specparam==2.0.0rc6
+    # Modelos ViT (ST-EEGFormer baseline)
+    - timm==1.0.24
+    # Extras
+    - plotly>=6.0
+    - statsmodels>=0.14
+    - pingouin>=0.5
+    - pooch>=1.8
+    - safetensors>=0.7
+    - huggingface-hub>=1.3
+    - pytest>=9.0
+    - antropy>=0.1.6
