@@ -249,11 +249,11 @@ def test_align_rejects_unknown_columns():
 
 
 def test_descriptor_catalogue_sizes():
-    assert len(DESCRIPTORS["P_full"]) == 106
-    assert len(DESCRIPTORS["P_madurativo"]) == 36
+    assert len(DESCRIPTORS["P_full"]) == 78
+    assert len(DESCRIPTORS["P_madurativo"]) == 32
     assert not any(c.startswith("osc_") for c in DESCRIPTORS["P_madurativo"])
     assert len(DESCRIPTORS["P_aper"]) == 8
-    assert len(set(DESCRIPTORS["P_full"])) == 106
+    assert len(set(DESCRIPTORS["P_full"])) == 78
     for name in ("P_madurativo", "P_aper"):
         assert set(DESCRIPTORS[name]).issubset(set(DESCRIPTORS["P_full"]))
 
@@ -275,7 +275,7 @@ def test_dataset_wide_max_shrinks_the_target_far_below_the_imposed_row_mean():
 
     dataset_max = float(torch.cdist(population, population, p=2).max())
     batch_max = float(torch.cdist(batch, batch, p=2).max())
-    assert dataset_max > batch_max, "el maximo global debe superar al del batch"
+    assert dataset_max > batch_max, "the dataset-wide maximum must exceed the batch one"
 
     def mean_target(max_dist):
         criterion = ExpCLRLoss(device, delta=1.0, feat_max_dist=max_dist, temperature=None)
@@ -295,7 +295,7 @@ def test_equidistant_geometry_sits_at_n_over_n_minus_one_not_at_one():
         D = loss.normalized_distance(z)
         off_diagonal = D[~torch.eye(n, dtype=bool)]
         assert torch.allclose(off_diagonal, torch.full_like(off_diagonal, n / (n - 1.0)),
-                              atol=1e-9), f"para n={n} se esperaba {n / (n - 1.0)}"
+                              atol=1e-9), f"expected {n / (n - 1.0)} for n={n}"
         assert torch.allclose(equidistant_reference(n, D.device).double(), D, atol=1e-9)
 
 
@@ -398,7 +398,7 @@ def test_loss_is_invariant_to_rescaling_the_embedding():
     reference = float(criterion(z, f))
     for scale in (1e-3, 0.5, 2.0, 1e3):
         assert float(criterion(z * scale, f)) == pytest.approx(reference, rel=1e-9), (
-            f"la perdida deberia ser invariante al reescalado, falla con c={scale}")
+            f"the loss should be invariant to rescaling, it fails with c={scale}")
 
 
 def test_zero_loss_is_unreachable_at_delta_one():

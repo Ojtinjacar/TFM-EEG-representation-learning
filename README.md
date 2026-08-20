@@ -229,7 +229,7 @@ First build the descriptor, aligned to the window order of `processed_windows.np
 
 ```bash
 python ../src/build_expert_features.py \
-    --features_path ../../data/eda_outputs/features_por_edad/features_106_por_ventana.parquet \
+    --features_path ../../data/eda_outputs/features_por_edad/features_78_por_ventana.parquet \
     --meta_path     data/processed/all_all/processed_metadata.csv \
     --output_dir    data/processed/expert_features \
     --descriptor    P_full

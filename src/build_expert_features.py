@@ -7,7 +7,7 @@ descriptor as a dense array whose row ``i`` corresponds to window ``i`` of
 ``processed_windows.npy``, the same positional convention used by
 :mod:`build_neighbor_index` (``index == position in X``).
 
-Source of truth is ``features_106_por_ventana.parquet`` (notebook 05), which holds the 106 curated
+Source of truth is ``features_78_por_ventana.parquet`` (notebook 05), which holds the 78 curated
 expert features for all 2609 windows. The older ``spectral_features_full.csv`` covers only the 2566
 windows that survive ``window_quality >= 2`` and is accepted as a fallback, at the cost of leaving
 43 windows without a descriptor.
@@ -17,7 +17,7 @@ sides and the join must cover the metadata exactly once.
 
 Usage:
     python code/src/build_expert_features.py \
-        --features_path data/eda_outputs/features_por_edad/features_106_por_ventana.parquet \
+        --features_path data/eda_outputs/features_por_edad/features_78_por_ventana.parquet \
         --meta_path code/TFM-EEG-representation-learning/data/processed/all_all/processed_metadata.csv \
         --output_dir code/TFM-EEG-representation-learning/data/processed/expert_features \
         --descriptor P_full
@@ -33,29 +33,31 @@ import numpy as np
 import pandas as pd
 
 # --- Descriptor definitions -------------------------------------------------------------------
-# The 26 base features that, x 4 ROIs, give 104, plus the 2 topographic contrasts = 106.
-# Mirrors BASE_A/BASE_B/BASE_C in code/notebooks/_build_05_features_por_edad.py:238-243 and
+# The 19 base features that, x 4 ROIs, give 76, plus the 2 topographic contrasts = 78.
+# The gamma band is excluded because it falls entirely outside the 1-20 Hz analysis range.
+# Mirrors BASE_A/BASE_B/BASE_C in code/notebooks/_build_05_features_por_edad.py and
 # code/experimentos/expclr_expert_features_definicion.md section 3.
 
 ROIS = ["frontal", "central", "parietal", "occipital"]
-BANDS = ["delta", "theta", "alpha", "beta", "gamma"]
+BANDS = ["delta", "theta", "alpha", "beta"]
 
 BASE_A = (
     ["paf_freq", "paf_power", "sp_alpha_cf", "sp_alpha_pw"]
     + [f"rel_{b}" for b in BANDS]
     + [f"osc_{b}" for b in BANDS]
     + ["apsd_slope", "apsd_offset", "total_power"]
-)  # 17 -> 68 columns
+)  # 15 -> 60 columns
 BASE_B = [
     "theta_alpha",
     "delta_theta",
     "delta_alpha",
     "low_high",
-    "spec_entropy",
-    "sef95",
-    "medfreq",
-]  # 7 -> 28 columns
-BASE_C = ["alpha_burst_count", "alpha_burst_occ"]  # 2 -> 8 columns
+]  # 4 -> 16 columns
+# BASE_C (alpha_burst_count, alpha_burst_occ) and the three spectral-shape measures
+# (spec_entropy, sef95, medfreq) were dropped on 2026-08-17. The shape ones have no
+# support in the corpus and are redundant with the relative powers; the burst ones are
+# the two least reliable measures of the descriptor. See code/experimentos/experimentos.md.
+BASE_C: list[str] = []
 TOPO = ["paf_central_minus_occipital", "paf_central_minus_parietal"]  # 2
 
 # Ablation axes (expclr_expert_features_definicion.md section 6).
@@ -70,7 +72,7 @@ BASE_MADURATIVO = (
     ["paf_freq", "paf_power"]
     + [f"rel_{b}" for b in BANDS]
     + ["apsd_slope", "apsd_offset"]
-)  # 9 -> 36 columns
+)  # 8 -> 32 columns (gamma was dropped on 2026-08-16)
 BASE_APER = ["apsd_slope", "apsd_offset"]  # 2 -> 8 columns
 
 
@@ -117,10 +119,10 @@ DESCRIPTORS: dict[str, list[str]] = {
     "P_aper": _expand(BASE_APER, topo=False),
 }
 
-# Descriptores del catálogo v2, cargados de su manifiesto cuando existe. `P_diverso` reparte 5
-# columnas por cada una de las 8 familias, elegidas SIN mirar la edad: seleccionar por correlación
-# con el target colapsa la geometría (dimensionalidad efectiva 6 frente a 20), y ExpCLR necesita
-# ejes complementarios para que ||f_i - f_j|| no mida una sola dirección.
+# Descriptors of the v2 catalogue, loaded from their manifest when present. `P_diverso` takes 5
+# columns from each of the 8 families, chosen WITHOUT looking at age: selecting by correlation with
+# the target collapses the geometry (effective dimensionality 6 versus 20), and ExpCLR needs
+# complementary axes so that ||f_i - f_j|| does not measure a single direction.
 for _v2_name in ("P_diverso", "P_fiable", "P_todo", "P_edad"):
     _v2_cols = _load_v2_descriptor(_v2_name)
     if _v2_cols:
@@ -251,7 +253,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--features_path",
-        default="data/eda_outputs/features_por_edad/features_106_por_ventana.parquet",
+        default="data/eda_outputs/features_por_edad/features_78_por_ventana.parquet",
         help="Expert-feature table (.parquet from notebook 05, or .csv fallback).",
     )
     parser.add_argument(
