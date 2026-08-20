@@ -61,7 +61,7 @@ def load_expclr_tuning(config_dir):
         variant.update(delta=cfg["delta"], lr=cfg["lr"], tau=cfg["tau"], sim_max=cfg["sim_max"])
         print(f"  {name}: delta={cfg['delta']} lr={cfg['lr']} tau={cfg['tau']} "
               f"sim_max={cfg['sim_max']} (MAE {cfg['mae']:.2f} vs "
-              f"{cfg['random_baseline_mae']:.2f} del encoder aleatorio)")
+              f"{cfg['random_baseline_mae']:.2f} for the random encoder)")
 
 
 def expclr_hparams(method):
@@ -72,6 +72,10 @@ def expclr_hparams(method):
 _NIDX_SESSION   = "data/processed/neighbor_index"
 _NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"
 _NIDX_DIFFAGE   = "data/processed/neighbor_index_diffage"
+# Same-session index built with exclude_lag=0, so the window immediately next to
+# the anchor is an eligible positive. Upper bound on how much of the gain the
+# temporal-contiguity shortcut alone can buy.
+_NIDX_LAG0      = "data/processed/neighbor_index_lag0"
 
 
 def _nbr(metric, index_dir):
@@ -89,6 +93,9 @@ SIMCLR_VARIANTS = {
     "SimCLR-diffage-cosine":  {"flags": _nbr("cosine", _NIDX_DIFFAGE),      "tag": "dacosine"},
     "SimCLR-diffage-wasser":  {"flags": _nbr("wasserstein", _NIDX_DIFFAGE), "tag": "dawasser"},
     "SimCLR-diffage-riemann": {"flags": _nbr("riemann", _NIDX_DIFFAGE),     "tag": "dariemann"},
+    "SimCLR-lag0-cosine":     {"flags": _nbr("cosine", _NIDX_LAG0),      "tag": "lag0cosine"},
+    "SimCLR-lag0-wasser":     {"flags": _nbr("wasserstein", _NIDX_LAG0), "tag": "lag0wasser"},
+    "SimCLR-lag0-riemann":    {"flags": _nbr("riemann", _NIDX_LAG0),     "tag": "lag0riemann"},
 }
 
 def parse_output(output):
@@ -747,7 +754,7 @@ def main(args):
                 print(f"  [SKIP] No fold range specified for target '{target}'")
                 continue
 
-            # Run each fold para este target
+            # Run each fold for this target
             for fold_idx, (train_idx, test_idx) in enumerate(loo_splits):
                 # Adjust fold_idx if processing a range
                 if fold_ranges_dict and target in fold_ranges_dict:
