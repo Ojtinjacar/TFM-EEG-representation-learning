@@ -64,7 +64,7 @@ def pretrain_fold(subject: str, epochs: int, features: Path, tag: str, seed: int
            "--exclude_subjects", *excl]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not ckpt.exists():
-        raise RuntimeError(f"fallo el preentrenamiento de {subject}:\n{res.stdout[-2000:]}\n{res.stderr[-2000:]}")
+        raise RuntimeError(f"pre-training failed for {subject}:\n{res.stdout[-2000:]}\n{res.stderr[-2000:]}")
     return ckpt
 
 
@@ -117,12 +117,12 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
         keep = ~meta.subject.isin(exclude_subjects).values
         meta = meta[keep].reset_index(drop=True)
         X, F = X[keep], F[keep]
-        print(f"Excluidos {len(exclude_subjects)} sujetos usados para ajustar hiperparametros: "
+        print(f"Excluded {len(exclude_subjects)} subjects used to tune hyperparameters: "
               f"{sorted(exclude_subjects)}")
     subjects = sorted(meta.subject.unique())
     y = meta.age.values.astype(float)
     groups = meta.subject.values
-    print(f"LOSO sobre {len(subjects)} sujetos | {len(meta)} ventanas | descriptor {F.shape}")
+    print(f"LOSO over {len(subjects)} subjects | {len(meta)} windows | descriptor {F.shape}")
 
     # B3 permutes the FULL on-disk descriptor so the subprocess (which reloads
     # the complete dataset) stays row-aligned; the artifact is derived data and
@@ -187,37 +187,37 @@ def run_loso(methods: list[str], epochs: int, device, seed: int = 42, delta: flo
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="E3: ExpCLR con P_diverso bajo LOSO.")
+    parser = argparse.ArgumentParser(description="E3: ExpCLR with P_diverso under LOSO.")
     parser.add_argument("--epochs", type=int, default=50,
-                        help="Epocas de preentrenamiento; la perdida converge hacia la 50.")
+                        help="Pretraining epochs; the loss converges by epoch 50.")
     parser.add_argument("--methods", nargs="+",
                         default=["ExpCLR", "B0", "B1", "B2", "B7"],
-                        help="ExpCLR, B0 media, B1 Ridge sobre descriptor, B2 encoder aleatorio, "
-                             "B3 descriptor permutado, B7 embedding+descriptor.")
+                        help="ExpCLR, B0 mean, B1 Ridge on the descriptor, B2 random encoder, "
+                             "B3 shuffled descriptor, B7 embedding+descriptor.")
     parser.add_argument("--seed", type=int, default=42,
-                        help="Semilla compartida por los 45 folds: lo que varia entre folds es el "
-                             "sujeto excluido, no la inicializacion.")
+                        help="Seed shared by the 45 folds: what varies across folds is the held-out "
+                             "subject, not the initialisation.")
     parser.add_argument("--delta", type=float, default=1.0,
-                        help="Margen Delta. El 1.0 del paper solo es valido si la media de "
-                             "(1 - s_ij) del descriptor vale 1; con P_diverso no es asi. "
-                             "Tomar el valor de tune_expclr.py.")
+                        help="Margin Delta. The paper's 1.0 only holds if the descriptor's mean "
+                             "(1 - s_ij) equals 1, which is not the case for P_diverso. "
+                             "Take the value from tune_expclr.py.")
     parser.add_argument("--lr", type=float, default=5e-3,
-                        help="Learning rate de Adam. El paper lo optimiza por dataset (Tab. 9), "
-                             "asi que tomarlo tambien de tune_expclr.py.")
+                        help="Adam learning rate. The paper tunes it per dataset (Tab. 9), so take "
+                             "it from tune_expclr.py as well.")
     parser.add_argument("--tau", type=float, default=1.0,
-                        help="Temperatura del minado de negativos duros. El paper declara que su "
-                             "propio 1.0 no es optimo (App. B.4: 'other tau < 1.0 could improve "
-                             "the performance slightly'), asi que tomarlo de tune_expclr.py.")
+                        help="Hard-negative mining temperature. The paper states its own 1.0 is not "
+                             "optimal (App. B.4: 'other tau < 1.0 could improve the performance "
+                             "slightly'), so take it from tune_expclr.py.")
     parser.add_argument("--sim_max", choices=["train", "batch"], default="train",
-                        help="Donde se toma max_kl ||f_k - f_l||. El paper permite ambas "
-                             "(Sec. 3.4) y cambia la escala de s_ij, luego interactua con Delta. "
-                             "Tomarlo de tune_expclr.py.")
+                        help="Where max_kl ||f_k - f_l|| is taken. The paper allows both (Sec. 3.4); "
+                             "it changes the scale of s_ij and therefore interacts with Delta. "
+                             "Take it from tune_expclr.py.")
     parser.add_argument("--exclude_subjects", nargs="*", default=[],
-                        help="Sujetos que se excluyen del LOSO por haberse usado para ajustar "
-                             "hiperparametros. Ver validation_subjects en best_config.json.")
+                        help="Subjects excluded from the LOSO because they were used to tune "
+                             "hyperparameters. See validation_subjects in best_config.json.")
     parser.add_argument("--config", type=Path, default=None,
-                        help="Lee delta, lr, sim_max y los sujetos de validacion del "
-                             "best_config.json que escribe tune_expclr.py, en vez de a mano.")
+                        help="Read delta, lr, sim_max and the validation subjects from the "
+                             "best_config.json written by tune_expclr.py, instead of by hand.")
     args = parser.parse_args()
 
     if args.config:
@@ -226,12 +226,12 @@ def main() -> None:
         args.sim_max = cfg.get("sim_max", args.sim_max)
         args.tau = cfg.get("tau", args.tau)
         args.exclude_subjects = cfg["validation_subjects"]
-        print(f"config de {args.config}: delta={args.delta} lr={args.lr} tau={args.tau} "
-              f"sim_max={args.sim_max} | {len(args.exclude_subjects)} sujetos excluidos")
+        print(f"config from {args.config}: delta={args.delta} lr={args.lr} tau={args.tau} "
+              f"sim_max={args.sim_max} | {len(args.exclude_subjects)} excluded subjects")
 
     if not args.exclude_subjects:
-        print("[AVISO] LOSO sin --config ni --exclude_subjects: los sujetos usados para "
-              "ajustar hiperparametros entraran en la evaluacion (sesgo optimista).")
+        print("[WARNING] LOSO without --config or --exclude_subjects: the subjects used to "
+              "tune hyperparameters will enter the evaluation (optimistic bias).")
 
     device = torch.device("mps" if torch.backends.mps.is_available()
                           else "cuda" if torch.cuda.is_available() else "cpu")
@@ -254,31 +254,32 @@ def main() -> None:
     session_cols = ["metodo", "n_sessions", "mae", "mae_ci_low", "mae_ci_high", "r2", "rho"]
     print("\n=== nivel sesion, out-of-fold (cifra principal) ===")
     print(summary[session_cols].round(3).to_string(index=False))
-    print("\n=== nivel sujeto, formula de master_table.py (comparable con E0-E2) ===")
+    print("\n=== subject level, master_table.py formula (comparable with E0-E2) ===")
     print(summary[["metodo", "nrmse_subject", "rmse_subject", "r2_subject"]]
           .round(3).to_string(index=False))
-    print("  (promedia las visitas de cada nino, por eso no es la cifra principal)")
+    print("  (averages the visits of each child, hence not the headline figure)")
 
     gaps = [(m, summary.loc[summary.metodo == m, "mae"].iloc[0],
              summary.loc[summary.metodo == f"{m}_KNN", "mae"].iloc[0])
             for m in results if f"{m}_KNN" in results.keys()]
     if gaps:
-        print("\n=== diferencia lineal vs KNN(k=1), MAE en meses ===")
+        print("\n=== linear vs KNN(k=1) difference, MAE in months ===")
         for method, linear, knn in sorted(gaps, key=lambda g: g[1]):
-            print(f"  {method:10s} lineal {linear:5.2f} | KNN {knn:5.2f} | diferencia {knn-linear:+5.2f}")
+            print(f"  {method:10s} linear {linear:5.2f} | KNN {knn:5.2f} | difference {knn-linear:+5.2f}")
 
     if "ExpCLR" in results and "B1" in results:
         diff = paired_bootstrap_difference(results["ExpCLR"], results["B1"], "mae")
         json.dump(diff, open(OUT / "contraste_primario.json", "w"), indent=2)
-        print("\ncontraste primario ExpCLR - B1 (Ridge sobre descriptor), MAE en meses:")
+        print("\nprimary contrast ExpCLR - B1 (Ridge on the descriptor), MAE in months:")
         print(f"  diferencia {diff['diff']:+.3f}  IC95 [{diff['ci_low']:+.3f}, {diff['ci_high']:+.3f}]"
-              f"  sobre {diff['n_paired_sessions']} sesiones")
-        print("  (negativo = ExpCLR mejor; si el IC cruza 0, no hay evidencia de diferencia)")
+              f"  over {diff['n_paired_sessions']} sessions")
+        print("  (negative = ExpCLR better; if the CI crosses 0, there is no evidence of a "
+              "difference)")
 
     if "ExpCLR" in results:
         visits = metrics_by_visit(results["ExpCLR"])
         visits.to_csv(OUT / "expclr_por_visita.csv", index=False)
-        print("\nExpCLR, error por visita (el target solo tiene 4 niveles):")
+        print("\nExpCLR, error per visit (the target has only 4 levels):")
         print(visits.round(2).to_string(index=False))
 
 

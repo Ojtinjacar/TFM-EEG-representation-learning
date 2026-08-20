@@ -114,16 +114,16 @@ def score(ckpt: Path | None, X, meta, y, groups, val_mask, device, random_seed: 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Ajuste de Delta y lr para ExpCLR con el procedimiento del paper.")
+        description="Tuning of Delta and lr for ExpCLR following the paper's procedure.")
     parser.add_argument("--epochs", type=int, default=30,
-                        help="Epocas por configuracion. Suficientes para ordenarlas, no para el "
-                             "resultado final.")
+                        help="Epochs per configuration. Enough to rank them, not for the final "
+                             "result.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--quick", action="store_true",
-                        help="Solo el eje Delta, al lr del paper para SleepEDF/Waveform (5e-3).")
+                        help="Delta axis only, at the paper's lr for SleepEDF/Waveform (5e-3).")
     parser.add_argument("--descriptor", default=DEFAULT_DESCRIPTOR,
-                        help="Descriptor experto sobre el que se busca. Cada uno necesita su "
-                             "propia busqueda: Delta depende de la escala de sus similitudes.")
+                        help="Expert descriptor the search runs on. Each one needs its own search, "
+                             "since Delta depends on the scale of its similarities.")
     args = parser.parse_args()
 
     device = torch.device("mps" if torch.backends.mps.is_available()
@@ -132,8 +132,8 @@ def main() -> None:
 
     features = features_path(args.descriptor)
     if not features.exists():
-        raise SystemExit(f"No existe el descriptor {args.descriptor} en {features}. "
-                         "Construyelo antes con code/src/build_expert_features.py.")
+        raise SystemExit(f"Descriptor {args.descriptor} does not exist at {features}. "
+                         "Build it first with code/src/build_expert_features.py.")
 
     X = np.asarray(np.load(DATA / "processed_windows.npy", mmap_mode="r"))
     meta = pd.read_csv(DATA / "processed_metadata.csv")
@@ -144,14 +144,14 @@ def main() -> None:
 
     train_subjects, val_subjects = split_subjects(groups, args.seed)
     val_mask = np.isin(groups, val_subjects)
-    print(f"device: {device} | {len(train_subjects)} sujetos de entrenamiento, "
-          f"{len(val_subjects)} de validacion: {val_subjects}")
+    print(f"device: {device} | {len(train_subjects)} training subjects, "
+          f"{len(val_subjects)} for validation: {val_subjects}")
 
     suggested = {sm: suggest_delta(F_raw, groups, set(val_subjects), sm)
                  for sm in ("train", "batch")}
     for sm, value in suggested.items():
-        print(f"Delta sugerido con --sim_max {sm}: {value:.2f} "
-              f"(= 1 / E[1 - s_ij]; el sesgo con Delta=1 seria {abs(1 - 1 / value):.3f})")
+        print(f"Suggested delta with --sim_max {sm}: {value:.2f} "
+              f"(= 1 / E[1 - s_ij]; the bias with Delta=1 would be {abs(1 - 1 / value):.3f})")
 
     baseline = score(None, X, meta, y, groups, val_mask, device, args.seed)
     print(f"referencia, encoder aleatorio: MAE={baseline['mae']:.2f} R2={baseline['r2']:.3f} "
@@ -185,22 +185,22 @@ def main() -> None:
         evaluate(delta, PAPER_LR, sim_max, "1", i, len(stage1))
 
     if not rows:
-        raise RuntimeError("ninguna configuracion completo el entrenamiento")
+        raise RuntimeError("no configuration completed training")
 
     best1 = min(rows, key=lambda r: r["mae"])
-    print(f"\nMejor de la etapa 1: delta={best1['delta']}, sim_max={best1['sim_max']}, "
+    print(f"\nBest of stage 1: delta={best1['delta']}, sim_max={best1['sim_max']}, "
           f"MAE={best1['mae']:.2f}")
 
     if not args.quick:
         lrs = [lr for lr in LR_GRID if lr != PAPER_LR]
-        print(f"\nEtapa 2: {len(lrs)} learning rates con delta={best1['delta']}, "
+        print(f"\nStage 2: {len(lrs)} learning rates with delta={best1['delta']}, "
               f"sim_max={best1['sim_max']}")
         for i, lr in enumerate(lrs, 1):
             evaluate(best1["delta"], lr, best1["sim_max"], "2", i, len(lrs))
 
         best2 = min(rows, key=lambda r: r["mae"])
         taus = [t for t in TAU_GRID if t != 1.0]
-        print(f"\nEtapa 3: {len(taus)} temperaturas con delta={best2['delta']}, "
+        print(f"\nStage 3: {len(taus)} temperatures with delta={best2['delta']}, "
               f"lr={best2['lr']}, sim_max={best2['sim_max']}")
         for i, tau in enumerate(taus, 1):
             evaluate(best2["delta"], best2["lr"], best2["sim_max"], "3", i, len(taus), tau)
@@ -209,7 +209,7 @@ def main() -> None:
     table.to_csv(OUT / f"tuning_results_{args.descriptor}.csv", index=False)
     best = table.iloc[0]
 
-    print("\n=== mejores configuraciones (ordenadas por MAE) ===")
+    print("\n=== best configurations (sorted by MAE) ===")
     print(table.head(10).round(3).to_string(index=False))
     print(f"\nreferencia aleatoria: MAE={baseline['mae']:.2f}, R2={baseline['r2']:.3f}, "
           f"dim_efectiva={baseline['effective_dim']:.2f}")
@@ -217,12 +217,12 @@ def main() -> None:
           f"MAE={best.mae:.2f}, R2={best.r2:.3f}, dim_efectiva={best.effective_dim:.2f}")
 
     if best.mae >= baseline["mae"]:
-        print("\nNINGUNA configuracion supera al encoder aleatorio. El resultado a reportar es "
-              "que ExpCLR no transfiere en este dominio, no un fallo de ajuste.")
-    print(f"\nAviso: la ganadora se elige entre {len(rows)} configuraciones sobre "
-          f"{int(baseline['n_sessions'])} sesiones de {len(val_subjects)} sujetos, asi que su "
-          f"metrica de validacion esta sesgada al alza por seleccion. La cifra reportable es la "
-          f"del LOSO posterior sobre los sujetos restantes, no esta.")
+        print("\nNO configuration beats the random encoder. The result to report is that "
+              "ExpCLR does not transfer in this domain, not a tuning failure.")
+    print(f"\nWarning: the winner is picked among {len(rows)} configurations over "
+          f"{int(baseline['n_sessions'])} sessions from {len(val_subjects)} subjects, so its "
+          f"validation metric is optimistically biased by selection. The reportable figure is "
+          f"the later LOSO over the remaining subjects, not this one.")
 
     config_path = OUT / f"best_config_{args.descriptor}.json"
     json.dump({"descriptor": args.descriptor,
@@ -238,7 +238,7 @@ def main() -> None:
               open(config_path, "w"), indent=2)
     print(f"\nGuardado en {config_path}. Lanzar despues:")
     print(f"  python -u run_e3_loso.py --epochs 50 --config {config_path}")
-    print(f"  o, para la tabla comparable: run_downstream.py --expclr_config {OUT}")
+    print(f"  or, for the comparable table: run_downstream.py --expclr_config {OUT}")
 
 
 if __name__ == "__main__":

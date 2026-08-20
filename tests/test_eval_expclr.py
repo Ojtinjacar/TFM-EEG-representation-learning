@@ -48,9 +48,9 @@ def test_extraction_is_deterministic_and_leaves_encoder_frozen():
     second = extract_embeddings(model, X, device, batch_size=8)
     after = list(model.buffers())
 
-    assert np.array_equal(first, second), "el probe no es determinista"
+    assert np.array_equal(first, second), "the probe is not deterministic"
     for b0, b1 in zip(before, after):
-        assert torch.equal(b0, b1), "los buffers de BatchNorm se han actualizado: no esta congelado"
+        assert torch.equal(b0, b1), "the BatchNorm buffers were updated, so it is not frozen"
 
 
 def test_extraction_is_invariant_to_batch_size():
@@ -113,7 +113,7 @@ def test_aggregation_uses_the_median_and_resists_outliers(windows):
     y_pred = y_true.copy()
     y_pred[0] = 1e6
     sessions = aggregate_to_sessions(windows, y_true, y_pred)
-    assert sessions.y_pred.max() < 100, "la mediana deberia absorber el valor extremo"
+    assert sessions.y_pred.max() < 100, "the median should absorb the extreme value"
 
 
 def test_metrics_are_perfect_on_perfect_predictions(windows):
@@ -136,7 +136,7 @@ def test_shuffling_labels_across_subjects_destroys_r2(windows):
     mapping = dict(zip(np.unique(subj), rng.permutation(np.unique(y).repeat(4)[:len(np.unique(subj))])))
     y_shuffled = np.array([mapping[s] for s in subj], dtype=float)
     m = session_metrics(aggregate_to_sessions(windows, y_shuffled, y))
-    assert m["r2"] < 0.3, "predecir la edad real cuando las etiquetas estan barajadas no deberia funcionar"
+    assert m["r2"] < 0.3, "predicting the real age from shuffled labels should not work"
 
 
 def test_metrics_by_visit_covers_every_visit(windows):
@@ -161,8 +161,8 @@ def test_paired_bootstrap_detects_a_clear_difference(windows):
     good = aggregate_to_sessions(windows, y, y + rng.normal(0, 0.5, len(y)))
     bad = aggregate_to_sessions(windows, y, y + rng.normal(0, 6, len(y)))
     res = paired_bootstrap_difference(good, bad, n_boot=300)
-    assert res["diff"] < 0, "el metodo bueno debe tener menor MAE"
-    assert res["ci_high"] < 0, "el intervalo debe excluir el cero"
+    assert res["diff"] < 0, "the good method must have the lower MAE"
+    assert res["ci_high"] < 0, "the interval must exclude zero"
 
 
 def test_paired_bootstrap_finds_no_difference_between_identical_methods(windows):

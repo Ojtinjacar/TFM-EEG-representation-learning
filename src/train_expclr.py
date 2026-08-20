@@ -333,20 +333,20 @@ if __name__ == "__main__":
                         help="Whether max_kl ||f_k - f_l|| is taken over the training split or "
                              "per batch. 'train' avoids leaking the held-out fold.")
     parser.add_argument("--loss_on", choices=["projection", "embedding"], default="projection",
-                        help="Donde se aplica la perdida. Por defecto 'projection', que aqui es la "
-                             "salida del encoder completo: el paper describe E como la red base mas "
-                             "una red totalmente conectada de dos capas encima (Sec. 4.2), asi que "
-                             "esas capas forman parte de E y no son una cabeza descartable como en "
-                             "SimCLR. La evaluacion debe usar la misma representacion, ver "
-                             "extract_embeddings. 'embedding' da el encoder dos capas mas corto y "
-                             "se conserva como ablacion.")
+                        help="Where the loss is applied. Defaults to 'projection', which here is the "
+                             "output of the full encoder: the paper describes E as the base network "
+                             "plus a two-layer fully connected network on top (Sec. 4.2), so those "
+                             "layers are part of E and not a discardable head as in SimCLR. "
+                             "Evaluation must use the same representation, see extract_embeddings. "
+                             "'embedding' yields the encoder two layers shorter and is kept as an "
+                             "ablation.")
     parser.add_argument("--dropout", type=float, default=0.0,
-                        help="Dropout del encoder. Cero por defecto: en el paper el dropout es una "
-                             "augmentation del baseline SimCLR (Sec. 4.3 y App. B.4), nunca un "
-                             "regularizador de ExpCLR, cuya tesis es que no usa transformaciones. "
-                             "Ademas haria E(x_i) estocastico justo donde la perdida mide "
-                             "distancias, metiendo ruido de mascara en D_ij. El 0.25 heredado "
-                             "queda disponible para la ablacion.")
+                        help="Encoder dropout. Zero by default: in the paper dropout is an "
+                             "augmentation of the SimCLR baseline (Sec. 4.3 and App. B.4), never a "
+                             "regulariser of ExpCLR, whose claim is that it uses no transformations. "
+                             "It would also make E(x_i) stochastic exactly where the loss measures "
+                             "distances, injecting mask noise into D_ij. The inherited 0.25 remains "
+                             "available for the ablation.")
     parser.add_argument("--diagnose_every", type=int, default=5,
                         help="Epoch interval for the geometry diagnostics (effective "
                              "dimensionality and equidistant-geometry reference).")

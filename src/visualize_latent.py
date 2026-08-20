@@ -272,7 +272,7 @@ def main():
 
     age_labels = meta['age'].values
 
-    # Preparar cuartiles de IQ para Triplet_cit_36mo (igual que en train_triplet_loss.py)
+    # Prepare IQ quartiles for Triplet_cit_36mo (same as in train_triplet_loss.py)
     iq_quartile_labels = None
     iq_valid_mask = None
     iq_intervals = None

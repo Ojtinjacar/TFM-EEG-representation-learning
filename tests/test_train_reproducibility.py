@@ -74,7 +74,7 @@ def _train(tiny_dataset, seed, save_dir, fold_id, diagnose_every=5):
     res = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
     assert res.returncode == 0, res.stderr[-3000:]
     ckpts = list(save_dir.glob("*.pth"))
-    assert len(ckpts) == 1, f"esperaba un checkpoint, hay {len(ckpts)}"
+    assert len(ckpts) == 1, f"expected one checkpoint, found {len(ckpts)}"
     state = torch.load(ckpts[0], map_location="cpu")
     ckpts[0].unlink()
     return state
@@ -85,13 +85,13 @@ def test_same_seed_reproduces_the_encoder_bit_for_bit(tiny_dataset, tmp_path):
     b = _train(tiny_dataset, 42, tmp_path, "b")
     assert a.keys() == b.keys()
     for key in a:
-        assert torch.equal(a[key], b[key]), f"el tensor {key} difiere entre dos runs con semilla 42"
+        assert torch.equal(a[key], b[key]), f"tensor {key} differs between two runs with seed 42"
 
 
 def test_different_seeds_produce_different_encoders(tiny_dataset, tmp_path):
     a = _train(tiny_dataset, 42, tmp_path, "a")
     b = _train(tiny_dataset, 7, tmp_path, "b")
-    assert any(not torch.equal(a[k], b[k]) for k in a), "cambiar la semilla no cambio nada"
+    assert any(not torch.equal(a[k], b[k]) for k in a), "changing the seed changed nothing"
 
 
 def test_diagnostics_do_not_change_the_trained_weights(tiny_dataset, tmp_path):
@@ -99,4 +99,4 @@ def test_diagnostics_do_not_change_the_trained_weights(tiny_dataset, tmp_path):
     rarely = _train(tiny_dataset, 42, tmp_path, "rarely", diagnose_every=1000)
     for key in often:
         assert torch.equal(often[key], rarely[key]), (
-            f"el tensor {key} cambia con --diagnose_every: el diagnostico altera el entrenamiento")
+            f"tensor {key} changes with --diagnose_every, so diagnostics alter training")

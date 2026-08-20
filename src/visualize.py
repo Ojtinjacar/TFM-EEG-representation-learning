@@ -181,7 +181,7 @@ def main():
     pca = PCA(n_components=3)
     pca_3d = pca.fit_transform(embeddings)
 
-    print("Visualizando PCA 3D por edad")
+    print("Visualising 3D PCA by age")
     plot_3d_interactive(pca_3d, metadata[:, 1].astype(int))
 
 if __name__ == "__main__":

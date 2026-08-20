@@ -51,7 +51,7 @@ def test_distinct_checkpoints_never_share_an_entry(windows, checkpoints):
     cache = EmbeddingCache(windows, torch.device("cpu"))
     a, b = cache.get(checkpoints[0]), cache.get(checkpoints[1])
     assert cache.stats == {"hits": 0, "misses": 2}
-    assert not np.allclose(a, b), "dos encoders distintos no deberian dar el mismo embedding"
+    assert not np.allclose(a, b), "two different encoders should not give the same embedding"
 
 
 def test_random_encoder_is_computed_once_for_the_whole_sweep(windows):
