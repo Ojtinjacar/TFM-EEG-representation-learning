@@ -200,8 +200,9 @@ def main(args):
         nidx_full = np.load(nidx_path)
         if nidx_full.shape[0] != len(keep_mask):
             raise ValueError(
-                f"neighbor_index ({nidx_full.shape[0]}) no alinea con el dataset ({len(keep_mask)}). "
-                "El indice debe computarse sobre el mismo conjunto de ventanas (mismo N/orden)."
+                f"neighbor_index ({nidx_full.shape[0]}) does not align with the dataset "
+                f"({len(keep_mask)}). The index must be computed over the same set of windows "
+                "(same N and order)."
             )
         kept = keep_mask.values
         g2l = np.full(len(kept), -1, dtype=np.int64)
@@ -213,10 +214,12 @@ def main(args):
 
         view1_augmenter = CIMCYCDataset(X, aug_mode=args.aug_mode)
         full_dataset = NeighborPositiveDataset(
-            X, neighbor_index, augment=view1_augmenter.augment_sample, fallback="duplicate",
+            X, neighbor_index, augment=view1_augmenter.augment_sample,
+            augment_anchor=(args.neighbor_view1 == "augmented"), fallback="duplicate",
         )
         print(f"Positives=neighbor metric={args.neighbor_metric} "
-              f"coverage={full_dataset.coverage():.3f} view1_aug_mode={args.aug_mode}")
+              f"coverage={full_dataset.coverage():.3f} view1={args.neighbor_view1} "
+              f"aug_mode={args.aug_mode} (aug_mode only affects the fallback when view1=raw)")
     else:
         full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
         print(f"Positives=augment aug_mode={args.aug_mode}")
@@ -403,6 +406,15 @@ if __name__ == "__main__":
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
     parser.add_argument(
+        "--neighbor_view1",
+        type=str,
+        default="raw",
+        choices=["raw", "augmented"],
+        help="With --positives neighbor, whether view 1 is the untransformed anchor ('raw', the "
+             "default: the pair is made of two real windows) or the augmented anchor ('augmented', "
+             "the previous behaviour). The augmenter is still used for the fallback.",
+    )
+    parser.add_argument(
         "--aug_mode",
         type=str,
         default="legacy",
@@ -423,7 +435,7 @@ if __name__ == "__main__":
         default="augment",
         choices=["augment", "neighbor"],
         help="Positive pair source: 'augment' (two augmentations) or 'neighbor' (view2 = real "
-             "nearest window, view1 = augmented anchor). See code/src/neighbor_positives.py."
+             "nearest window). See code/src/neighbor_positives.py."
     )
     parser.add_argument(
         "--neighbor_metric",

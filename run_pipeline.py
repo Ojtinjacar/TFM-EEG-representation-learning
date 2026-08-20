@@ -106,6 +106,7 @@ def main(args):
                             "--seed", str(1000 + i),
                             "--aug_mode", args.aug_mode,
                             "--positives", args.positives,
+                            "--neighbor_view1", args.neighbor_view1,
                             "--neighbor_metric", args.neighbor_metric,
                             "--neighbor_index_dir", args.neighbor_index_dir,
                             "--exclude_subjects", *[str(s) for s in test_subjects],
@@ -350,6 +351,14 @@ if __name__ == "__main__":
         default="augment",
         choices=["augment", "neighbor"],
         help="Positive pair source forwarded to train_simclr.py (augment|neighbor)."
+    )
+    parser.add_argument(
+        "--neighbor_view1",
+        type=str,
+        default="raw",
+        choices=["raw", "augmented"],
+        help="Forwarded to train_simclr.py: with --positives neighbor, whether view1 is the raw "
+             "anchor (default, both views are real windows) or the augmented anchor."
     )
     parser.add_argument(
         "--neighbor_metric",

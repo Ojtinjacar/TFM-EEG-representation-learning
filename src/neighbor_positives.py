@@ -1,24 +1,23 @@
-"""Muestreo de positivos por vecino más cercano para SSL contrastivo sobre EEG.
+"""Nearest-neighbour positive sampling for contrastive SSL on EEG.
 
-En lugar de generar el positivo con una perturbación sintética (augmentation ciego), esta
-estrategia toma como positivo la **ventana real más cercana** a un ancla dentro de su misma
-sesión (y, por defecto, su misma actividad/bloque), según una de tres distancias:
+Instead of building the positive with a synthetic perturbation (blind augmentation), this
+strategy takes as positive the **closest real window** to an anchor within the same session
+(and, by default, the same activity/block), under one of three distances:
 
-- ``cosine``: sobre el vector de features 24-D z-scoreado intra-sujeto (perfil espectral);
-- ``wasserstein``: sobre el PSD normalizado por ROI (forma espectral);
-- ``riemann``: sobre la matriz de covarianza espacial SPD (patrón entre canales).
+- ``cosine``: on the 24-D feature vector z-scored within subject (spectral profile);
+- ``wasserstein``: on the ROI-normalised PSD (spectral shape);
+- ``riemann``: on the SPD spatial covariance matrix (cross-channel pattern).
 
-Es un muestreo de positivos por vecino, en la línea de NNCLR (Dwibedi et al., ICCV 2021,
-arXiv:2104.14548). Novedad para EEG y propuesta del TFM: aquí el vecino se busca en el espacio
-de features de entrada (no en un espacio de embeddings aprendido), por lo que su fiabilidad
-depende de estas distancias fijas. Restringir el vecino a la misma actividad mitiga el riesgo de
-falso positivo (positivos que cruzarían de tarea).
+This is neighbour-based positive sampling, in the line of NNCLR (Dwibedi et al., ICCV 2021,
+arXiv:2104.14548). New for EEG and proposed by this work: here the neighbour is searched in the
+input feature space (not in a learned embedding space), so its reliability rests on these fixed
+distances. Restricting the neighbour to the same activity mitigates the risk of false positives
+(positives crossing task boundaries).
 
-Este módulo NO modifica la pérdida. ``NeighborPositiveDataset`` entrega, por ítem, el ancla y
-dos vistas ``(anchor, view1, view2)`` compatibles con el pipeline heredado
-(``CIMCYCDataset`` en ``train_simclr.py``); con ``k > 1`` positivos, la integración en la
-pérdida (expandir a pares o usar una pérdida multi-positivo tipo SupCon) queda a cargo del
-llamador.
+This module does NOT modify the loss. ``NeighborPositiveDataset`` yields, per item, the anchor
+and two views ``(anchor, view1, view2)`` compatible with the inherited pipeline
+(``CIMCYCDataset`` in ``train_simclr.py``); with ``k > 1`` positives, wiring them into the loss
+(expanding to pairs or using a multi-positive loss such as SupCon) is left to the caller.
 """
 
 from __future__ import annotations
@@ -37,20 +36,20 @@ def _session_distance_matrix(
     gpos: np.ndarray,
     reprs: Mapping[str, object],
 ) -> np.ndarray:
-    """Matriz de distancias (n x n) entre las ventanas de un grupo, según ``metric``.
+    """Distance matrix (n x n) between the windows of a group, under ``metric``.
 
     Args:
         metric: 'cosine' | 'wasserstein' | 'riemann'.
-        gpos: posiciones globales (índices en meta_epochs / X) de las ventanas del grupo.
-        reprs: representaciones precomputadas. Claves requeridas por métrica:
+        gpos: global positions (indices into meta_epochs / X) of the windows in the group.
+        reprs: precomputed representations. Keys required per metric:
             'cosine' -> 'feat_z' (N, D); 'wasserstein' -> 'psd_norm' (N, n_roi, n_freq);
-            'riemann' -> 'cov' (M, C, C) y 'gpos_to_cov' (dict posición-global -> fila en cov).
+            'riemann' -> 'cov' (M, C, C) and 'gpos_to_cov' (dict global position -> row in cov).
 
     Returns:
-        Matriz simétrica (n, n) de distancias con diagonal 0.
+        Symmetric (n, n) distance matrix with zero diagonal.
 
     Raises:
-        ValueError: si ``metric`` no es válido o falta una representación.
+        ValueError: if ``metric`` is not valid or a representation is missing.
     """
     n = len(gpos)
     if metric == "cosine":
@@ -91,31 +90,32 @@ def build_neighbor_positive_table(
     same_activity: bool = True,
     exclude_lag: int = 0,
 ) -> pd.DataFrame:
-    """Construye la tabla de vecinos positivos por ventana, según una distancia.
+    """Build the per-window table of positive neighbours under a given distance.
 
-    Para cada ventana de calidad (ancla) busca sus ``k`` vecinos más cercanos dentro de su misma
-    sesión ``(subject, age)`` y, si ``same_activity``, de su mismo ``block``, excluyendo el propio
-    ancla y (opcionalmente) los vecinos con ``|lag| <= exclude_lag``.
+    For each quality window (anchor) it finds its ``k`` closest neighbours within the same
+    session ``(subject, age)`` and, if ``same_activity``, within the same ``block``, excluding
+    the anchor itself and (optionally) neighbours with ``|lag| <= exclude_lag``.
 
     Args:
-        reprs: representaciones precomputadas (ver :func:`_session_distance_matrix`).
-        meta_q: metadatos de ventanas de calidad; su índice es la posición global en X.
-            Debe contener columnas ``subject, age, epoch_index, block``.
+        reprs: precomputed representations (see :func:`_session_distance_matrix`).
+        meta_q: metadata of quality windows; its index is the global position in X.
+            Must contain the columns ``subject, age, epoch_index, block``.
         metric: 'cosine' | 'wasserstein' | 'riemann'.
-        k: número máximo de vecinos positivos por ancla.
-        same_activity: si True, el vecino debe compartir ``block`` con el ancla.
-        exclude_lag: excluye vecinos con ``|epoch_index_ancla - epoch_index_vecino| <= exclude_lag``.
+        k: maximum number of positive neighbours per anchor.
+        same_activity: if True, the neighbour must share ``block`` with the anchor.
+        exclude_lag: drops neighbours with ``|anchor_epoch_index - neighbour_epoch_index| <=
+            exclude_lag``.
 
     Returns:
-        DataFrame con una fila por (ancla, vecino): columnas ``subject, age, block, metric,
-        anchor_gpos, anchor_epoch, neigh_gpos, neigh_epoch, lag, dist, rank`` (``rank`` 1 = más
-        cercano). Las anclas sin vecino válido no generan filas.
+        DataFrame with one row per (anchor, neighbour): columns ``subject, age, block, metric,
+        anchor_gpos, anchor_epoch, neigh_gpos, neigh_epoch, lag, dist, rank`` (``rank`` 1 =
+        closest). Anchors without a valid neighbour produce no rows.
 
     Raises:
-        ValueError: si ``metric`` no es válido.
+        ValueError: if ``metric`` is not valid.
     """
     if metric not in VALID_METRICS:
-        raise ValueError(f"metric no válida: {metric!r} (usar una de {VALID_METRICS})")
+        raise ValueError(f"invalid metric: {metric!r} (use one of {VALID_METRICS})")
 
     group_cols = ["subject", "age"] + (["block"] if same_activity else [])
     rows: list[dict] = []
@@ -160,16 +160,16 @@ def build_neighbor_positive_table(
 
 
 def neighbor_index_array(table: pd.DataFrame, n_total: int, k: int) -> np.ndarray:
-    """Convierte la tabla de vecinos en un array (n_total, k) de índices globales.
+    """Turn the neighbour table into an (n_total, k) array of global indices.
 
     Args:
-        table: salida de :func:`build_neighbor_positive_table`.
-        n_total: número total de ventanas (longitud de X), para dimensionar el array.
-        k: número de columnas de vecinos por ancla.
+        table: output of :func:`build_neighbor_positive_table`.
+        n_total: total number of windows (length of X), used to size the array.
+        k: number of neighbour columns per anchor.
 
     Returns:
-        Array int (n_total, k) donde la entrada es la posición global del vecino de ese rango, o
-        -1 si no existe. Filas de anclas sin vecinos quedan a -1.
+        Int array (n_total, k) where each entry is the global position of the neighbour at that
+        rank, or -1 if it does not exist. Rows of anchors without neighbours stay at -1.
     """
     idx = np.full((n_total, k), -1, dtype=np.int64)
     for _, r in table.iterrows():
@@ -180,23 +180,29 @@ def neighbor_index_array(table: pd.DataFrame, n_total: int, k: int) -> np.ndarra
 
 
 class NeighborPositiveDataset:
-    """Dataset de positivos por vecino, compatible con el pipeline SimCLR heredado.
+    """Neighbour-positive dataset, compatible with the inherited SimCLR pipeline.
 
-    Cada ítem devuelve ``(anchor, view1, view2)`` donde ``view2`` es una ventana **vecina real**
-    (positivo por distancia) y ``view1`` es el ancla o un augmentation del ancla. Imita las
-    convenciones de ``CIMCYCDataset`` (tensores ``torch.FloatTensor`` de forma ``(n_canales,
-    n_muestras)``), de modo que el ``train_loader`` heredado (``for anchor, aug1, aug2 in ...``)
-    lo consume sin cambios.
+    Each item returns ``(anchor, view1, view2)`` where ``view2`` is a **real neighbouring
+    window** (positive by distance) and ``view1`` is the anchor, either raw or augmented. It
+    mirrors the conventions of ``CIMCYCDataset`` (``torch.FloatTensor`` tensors of shape
+    ``(n_channels, n_samples)``), so the inherited ``train_loader``
+    (``for anchor, aug1, aug2 in ...``) consumes it unchanged.
 
     Args:
-        X: tensor/array ``(N, C, T)`` con las ventanas EEG.
-        neighbor_index: array ``(N, k)`` de posiciones globales de vecinos (-1 si no hay), p. ej.
-            de :func:`neighbor_index_array`.
-        augment: callable opcional ``tensor(C,T) -> tensor(C,T)`` para aumentar ``view1`` (y el
-            fallback). Si es None, ``view1`` es el ancla sin cambios.
-        fallback: qué hacer cuando un ancla no tiene vecino válido: ``'duplicate'`` (view2 = ancla,
-            o su augmentation si ``augment`` no es None) o ``'skip_none'`` (view2 = None).
-        seed: semilla para la elección aleatoria del vecino entre los disponibles.
+        X: tensor/array ``(N, C, T)`` holding the EEG windows.
+        neighbor_index: array ``(N, k)`` of global neighbour positions (-1 when absent), e.g.
+            from :func:`neighbor_index_array`.
+        augment: optional callable ``tensor(C,T) -> tensor(C,T)``. Used for ``view1`` when
+            ``augment_anchor`` is True, and always for the fallback of anchors without a
+            neighbour.
+        augment_anchor: when False, ``view1`` is the untransformed anchor and the pair is made of
+            two real windows. The augmenter is still used for the fallback, since otherwise the
+            two views of an anchor without a neighbour would be identical and the loss would
+            degenerate.
+        fallback: what to do when an anchor has no valid neighbour: ``'duplicate'`` (view2 =
+            anchor, or its augmentation if ``augment`` is not None) or ``'skip_none'``
+            (view2 = None).
+        seed: seed for the random choice of neighbour among those available.
     """
 
     def __init__(
@@ -205,6 +211,7 @@ class NeighborPositiveDataset:
         neighbor_index: np.ndarray,
         *,
         augment: Callable | None = None,
+        augment_anchor: bool = True,
         fallback: str = "duplicate",
         seed: int = 42,
     ) -> None:
@@ -218,6 +225,7 @@ class NeighborPositiveDataset:
         if fallback not in ("duplicate", "skip_none"):
             raise ValueError("fallback debe ser 'duplicate' o 'skip_none'")
         self.augment = augment
+        self.augment_anchor = augment_anchor
         self.fallback = fallback
         self._rng = np.random.default_rng(seed)
 
@@ -225,12 +233,15 @@ class NeighborPositiveDataset:
         return len(self.X)
 
     def coverage(self) -> float:
-        """Fracción de anclas con al menos un vecino válido."""
+        """Fraction of anchors with at least one valid neighbour."""
         return float((self.neighbor_index >= 0).any(axis=1).mean())
 
     def __getitem__(self, i: int):
         anchor = self.X[i]
-        view1 = self.augment(anchor) if self.augment is not None else anchor.clone()
+        if self.augment is not None and self.augment_anchor:
+            view1 = self.augment(anchor)
+        else:
+            view1 = anchor.clone()
         neighs = self.neighbor_index[i]
         neighs = neighs[neighs >= 0]
         if len(neighs) == 0:
