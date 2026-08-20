@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
+from checkpoint_naming import simclr_checkpoint_name, write_sidecar
 from loss import NTXentLoss
 from models import EnhancedAttentionLSTM
     
@@ -152,10 +153,28 @@ def main(args):
         print(f'Epoch [{epoch+1}/{args.num_epochs}], Loss: {epoch_loss:.4f}')
 
     # Save model
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-    model_path = os.path.join(args.save_dir, f"SimCLR_{args.zone}_{args.frequency}{fold_suffix}_batch_{args.batch_size}_lr_{args.lr}_wd_{args.weight_decay}_temperature_{args.temperature}.pth")
+    model_filename = simclr_checkpoint_name(
+        args.zone, args.frequency, args.fold_id,
+        batch_size=args.batch_size, lr=args.lr,
+        weight_decay=args.weight_decay, temperature=args.temperature,
+    )
+    model_path = os.path.join(args.save_dir, model_filename)
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
+    write_sidecar(model_path, {
+        "method": "SimCLR",
+        "zone": args.zone,
+        "frequency": args.frequency,
+        "fold_id": args.fold_id,
+        "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+        "seed": getattr(args, "seed", None),
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "weight_decay": args.weight_decay,
+        "temperature": args.temperature,
+        "num_epochs": args.num_epochs,
+        "n_windows": int(len(X)),
+    })
 
     # Extract embeddings
     model.eval()
@@ -185,6 +204,7 @@ def main(args):
     plt.grid(True)
     plt.tight_layout()
 
+    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
     plot_path = os.path.join(args.plot_dir, f"SimCLR_{args.zone}_{args.frequency}{fold_suffix}_training_loss_curve.png")
     plt.savefig(plot_path)
     print(f"Loss curve saved to {plot_path}")

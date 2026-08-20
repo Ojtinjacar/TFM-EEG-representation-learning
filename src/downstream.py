@@ -387,7 +387,8 @@ def main(args):
                 model.parameters(), lr=args.lr, weight_decay=args.weight_decay
             )
 
-        model_tag = f"{args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}"
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        model_tag = f"{args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}{fold_suffix}"
     
     elif args.method == "PCA":
         embedding_size = args.embedding_size
@@ -416,7 +417,8 @@ def main(args):
         # The model is just the 'Head' that learns from the PCA components
         model = Head(embedding_size, 1).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        model_tag = f"PCA_{args.zone}_{args.frequency}_{args.target}"
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        model_tag = f"PCA_{args.zone}_{args.frequency}_{args.target}{fold_suffix}"
 
     elif args.method == "supervised":
         print(f"\n=== Training supervised from scratch ===")
@@ -442,7 +444,8 @@ def main(args):
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay
         )
-        model_tag = f"supervised_{args.zone}_{args.frequency}_{args.target}"
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        model_tag = f"supervised_{args.zone}_{args.frequency}_{args.target}{fold_suffix}"
 
     else:
         raise ValueError(f"Unrecognised method '{args.method}'.")
@@ -501,7 +504,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_dir",
         type=str,
-        default="save/models",
+        default="save/downstream_models",
         help="Directory to save the linear probing model."
     )
     parser.add_argument(

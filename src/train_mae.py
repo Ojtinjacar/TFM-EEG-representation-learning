@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
 
+from checkpoint_naming import mae_checkpoint_name, write_sidecar
 from models import MaskedAttentionLSTMAutoencoder
 from utils import split_dataset, create_dataloader
 
@@ -399,9 +400,11 @@ def main():
     # Training
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-    block_suffix = f"_block{args.block_size}" if args.block_size else ""
-    model_name = f"MAE_{args.zone}_{args.frequency}{fold_suffix}_hidden{args.hidden_size}_mask{int(args.mask_ratio*100)}{block_suffix}_e{args.epochs}"
+    model_name = mae_checkpoint_name(
+        args.zone, args.frequency, args.fold_id,
+        hidden_size=args.hidden_size, mask_ratio=args.mask_ratio,
+        block_size=args.block_size, epochs=args.epochs,
+    )[:-len(".pth")]
 
     print(f"[INFO] Starting model training: {model_name}")
     print(f"[INFO] Strategy: Mask {args.mask_ratio*100}% of the signal and predict only masked parts")
@@ -418,6 +421,22 @@ def main():
         max_lr=args.lr,
         mask_ratio=args.mask_ratio,
     )
+
+    if args.save_model_dir:
+        write_sidecar(os.path.join(args.save_model_dir, f"{model_name}.pth"), {
+            "method": "MAE",
+            "zone": args.zone,
+            "frequency": args.frequency,
+            "fold_id": args.fold_id,
+            "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "seed": getattr(args, "seed", None),
+            "hidden_size": args.hidden_size,
+            "mask_ratio": args.mask_ratio,
+            "block_size": args.block_size,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "n_windows": int(len(X)),
+        })
 
     # Visualise reconstructions at end of training
     print("\n[INFO] Generating reconstruction visualisations...")

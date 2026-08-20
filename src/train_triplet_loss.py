@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
+from checkpoint_naming import triplet_checkpoint_name, write_sidecar
 from models import EnhancedAttentionLSTM
 
 class TripletDataset(Dataset):
@@ -185,14 +186,25 @@ def main(args):
 
 
     # --- Save model ---
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-    model_filename = (
-        f"Triplet_{args.target}_{args.zone}_{args.frequency}{fold_suffix}_"
-        f"emb{args.embedding_size}_m{args.margin}.pth"
+    model_filename = triplet_checkpoint_name(
+        args.target, args.zone, args.frequency, args.fold_id,
+        embedding_size=args.embedding_size, margin=args.margin,
     )
     model_path = os.path.join(args.save_dir, model_filename)
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to: {model_path}")
+    write_sidecar(model_path, {
+        "method": "TripletLoss",
+        "target": args.target,
+        "zone": args.zone,
+        "frequency": args.frequency,
+        "fold_id": args.fold_id,
+        "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+        "seed": getattr(args, "seed", None),
+        "embedding_size": args.embedding_size,
+        "margin": args.margin,
+        "n_windows": int(len(X)),
+    })
 
     # --- Loss curve plot ---
     plt.figure()
@@ -203,6 +215,7 @@ def main(args):
     plt.grid(True)
     plt.tight_layout()
 
+    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
     plot_filename = f"Triplet_{args.target}_{args.zone}_{args.frequency}{fold_suffix}_loss_curve.png"
     plot_path = os.path.join(args.plot_dir, plot_filename)
     plt.savefig(plot_path)

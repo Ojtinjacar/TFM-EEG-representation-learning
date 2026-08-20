@@ -2,12 +2,22 @@ import os
 import subprocess
 import re
 import argparse
+import sys
 
 import pandas as pd
 import numpy as np
 
 from sklearn.model_selection import KFold, LeaveOneOut
 from sklearn.metrics import r2_score
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+from checkpoint_naming import (
+    ae_checkpoint_name,
+    checkpoint_is_reusable,
+    mae_checkpoint_name,
+    simclr_checkpoint_name,
+    triplet_checkpoint_name,
+)
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
@@ -44,7 +54,8 @@ def parse_output(output):
 
     return nrmse, r2, rmse, subject_avgs
 
-def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False):
+def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False,
+                    allow_legacy=False):
     """
     Constructs and runs a single call to pretraining script, excluding test subjects.
     Returns the path to the trained model.
@@ -62,24 +73,35 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         # These methods do not require pre-training
         return None
 
+    exclude_sorted = sorted(str(s) for s in test_subjects)
+    expected = {
+        "zone": zone,
+        "frequency": frequency,
+        "exclude_subjects": exclude_sorted,
+    }
+
     # Determine the model filename based on the method
     if method == "SimCLR":
-        model_filename = f"SimCLR_{zone}_{frequency}_{fold_id}_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth"
+        model_filename = simclr_checkpoint_name(zone, frequency, fold_id)
+        expected.update({"method": "SimCLR", "fold_id": fold_id})
     elif method == "AE":
-        model_filename = f"AE_{zone}_{frequency}_{fold_id}_hidden128_e100.pth"
+        model_filename = ae_checkpoint_name(zone, frequency, fold_id)
+        expected.update({"method": "AE", "fold_id": fold_id})
     elif method == "MAE":
-        model_filename = f"MAE_{zone}_{frequency}_{fold_id}_hidden128_mask30_block25_e100.pth"
+        model_filename = mae_checkpoint_name(zone, frequency, fold_id)
+        expected.update({"method": "MAE", "fold_id": fold_id})
     elif method == "TripletLoss":
-        model_filename = f"Triplet_{target}_{zone}_{frequency}_{fold_id}_emb128_m0.4.pth"
+        model_filename = triplet_checkpoint_name(target, zone, frequency, fold_id)
+        expected.update({"method": "TripletLoss", "fold_id": fold_id, "target": target})
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
 
     model_path = os.path.join("save/models", model_filename)
 
-    # Check if the model already exists
-    if not no_skip and os.path.exists(model_path):
-        print(f"  > Model already exists: {model_filename}. Skipping pretraining.")
+    # Reuse only a checkpoint whose sidecar matches the intended configuration
+    if not no_skip and checkpoint_is_reusable(model_path, expected, allow_legacy=allow_legacy):
+        print(f"  > Reusable model found: {model_filename}. Skipping pretraining.")
         return model_path
 
     # Build command based on the method
@@ -231,7 +253,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         frequency=args.frequency,
         test_subjects=test_subjects,
         fold_id=fold_id,
-        no_skip=args.no_skip
+        no_skip=args.no_skip, allow_legacy=args.allow_legacy
     )
     pretrained_models["SimCLR"] = simclr_model
 
@@ -244,7 +266,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         frequency=args.frequency,
         test_subjects=test_subjects,
         fold_id=fold_id,
-        no_skip=args.no_skip
+        no_skip=args.no_skip, allow_legacy=args.allow_legacy
     )
     pretrained_models["AE"] = ae_model
 
@@ -257,7 +279,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         frequency=args.frequency,
         test_subjects=test_subjects,
         fold_id=fold_id,
-        no_skip=args.no_skip
+        no_skip=args.no_skip, allow_legacy=args.allow_legacy
     )
     pretrained_models["MAE"] = mae_model
 
@@ -280,7 +302,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             frequency=args.frequency,
             test_subjects=valid_test_subjects,
             fold_id=fold_id,
-            no_skip=args.no_skip
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy
         )
         pretrained_models[f"TripletLoss_{target}"] = triplet_model
 
@@ -721,6 +743,11 @@ if __name__ == "__main__":
         "--no_skip",
         action="store_true",
         help="Force retraining even if model already exists."
+    )
+    parser.add_argument(
+        "--allow_legacy",
+        action="store_true",
+        help="Allow reusing checkpoints whose sidecar is a backfilled legacy record."
     )
     args = parser.parse_args()
     main(args)

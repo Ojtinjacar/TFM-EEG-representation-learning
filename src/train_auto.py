@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
 
+from checkpoint_naming import ae_checkpoint_name, write_sidecar
 from models import AttentionLSTMAutoencoder
 from utils import split_dataset, create_dataloader
 
@@ -243,8 +244,10 @@ def main():
     criterion = nn.MSELoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-    model_name = f"AE_{args.zone}_{args.frequency}{fold_suffix}_hidden{args.hidden_size}_e{args.epochs}"
+    model_name = ae_checkpoint_name(
+        args.zone, args.frequency, args.fold_id,
+        hidden_size=args.hidden_size, epochs=args.epochs,
+    )[:-len(".pth")]
 
     print(f"[INFO] Starting model training: {model_name}")
     fit_model(
@@ -260,6 +263,20 @@ def main():
         save_fig_dir=args.save_fig_dir,
         max_lr=args.lr,
     )
+
+    if args.save_model_dir:
+        write_sidecar(os.path.join(args.save_model_dir, f"{model_name}.pth"), {
+            "method": "AE",
+            "zone": args.zone,
+            "frequency": args.frequency,
+            "fold_id": args.fold_id,
+            "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "seed": getattr(args, "seed", None),
+            "hidden_size": args.hidden_size,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "n_windows": int(len(X)),
+        })
 
     print("[INFO] Pipeline completed.")
 
