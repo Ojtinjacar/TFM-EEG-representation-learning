@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
 from checkpoint_naming import simclr_checkpoint_name, write_sidecar
+from utils import set_seed
 from loss import NTXentLoss
 from models import EnhancedAttentionLSTM
     
@@ -120,7 +121,8 @@ def main(args):
 
     # Create datasets using subsets
     full_dataset = CIMCYCDataset(X)
-    train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+                              generator=torch.Generator().manual_seed(args.seed))
     eval_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=False)
 
     model = EnhancedAttentionLSTM(
@@ -299,5 +301,12 @@ if __name__ == "__main__":
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
     main(args)

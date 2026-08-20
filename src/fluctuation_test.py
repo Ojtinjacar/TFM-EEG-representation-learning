@@ -127,10 +127,11 @@ def plot_superposed_k_metrics(metrics_list, age, save_path):
 # ------------------------------------------------------------
 # 3) TRAIN ONE MODEL
 # ------------------------------------------------------------
-def train_one_model(X, X_age, age, device, hidden_size, batch_size, num_epochs, sampling_frequency, temperature):
+def train_one_model(X, X_age, age, device, hidden_size, batch_size, num_epochs, sampling_frequency, temperature, seed=42):
 
     dataset = CIMCYCDataset(X)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+                        generator=torch.Generator().manual_seed(seed))
 
     model = EnhancedAttentionLSTM(
         input_size=X_age.shape[2],

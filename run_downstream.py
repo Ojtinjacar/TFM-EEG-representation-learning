@@ -55,7 +55,7 @@ def parse_output(output):
     return nrmse, r2, rmse, subject_avgs
 
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False,
-                    allow_legacy=False):
+                    allow_legacy=False, seed=42):
     """
     Constructs and runs a single call to pretraining script, excluding test subjects.
     Returns the path to the trained model.
@@ -78,6 +78,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         "zone": zone,
         "frequency": frequency,
         "exclude_subjects": exclude_sorted,
+        "seed": seed,
     }
 
     # Determine the model filename based on the method
@@ -140,6 +141,8 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--fold_id", fold_id,
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
+
+    command += ["--seed", str(seed)]
 
     print(f"  > Running pretraining command: {' '.join(command)}")
     try:
@@ -238,6 +241,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
     # Dictionary to store pre-trained models
     pretrained_models = {}
+    pretrain_seed = args.base_seed + fold_idx
 
     # ========================================================================
     # PHASE 1: PRE-TRAINING (considering dependencies)
@@ -253,7 +257,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         frequency=args.frequency,
         test_subjects=test_subjects,
         fold_id=fold_id,
-        no_skip=args.no_skip, allow_legacy=args.allow_legacy
+        no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
     )
     pretrained_models["SimCLR"] = simclr_model
 
@@ -266,7 +270,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         frequency=args.frequency,
         test_subjects=test_subjects,
         fold_id=fold_id,
-        no_skip=args.no_skip, allow_legacy=args.allow_legacy
+        no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
     )
     pretrained_models["AE"] = ae_model
 
@@ -279,7 +283,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         frequency=args.frequency,
         test_subjects=test_subjects,
         fold_id=fold_id,
-        no_skip=args.no_skip, allow_legacy=args.allow_legacy
+        no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
     )
     pretrained_models["MAE"] = mae_model
 
@@ -302,7 +306,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             frequency=args.frequency,
             test_subjects=valid_test_subjects,
             fold_id=fold_id,
-            no_skip=args.no_skip, allow_legacy=args.allow_legacy
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
         )
         pretrained_models[f"TripletLoss_{target}"] = triplet_model
 

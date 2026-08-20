@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
 from checkpoint_naming import triplet_checkpoint_name, write_sidecar
+from utils import set_seed
 from models import EnhancedAttentionLSTM
 
 class TripletDataset(Dataset):
@@ -115,7 +116,8 @@ def main(args):
 
     # --- Dataset and DataLoader ---
     dataset = TripletDataset(X, y)
-    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+                              generator=torch.Generator().manual_seed(args.seed))
 
     # --- Model, Optimizer and Loss ---
     model = EnhancedAttentionLSTM(
@@ -326,5 +328,12 @@ if __name__ == "__main__":
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
     main(args)

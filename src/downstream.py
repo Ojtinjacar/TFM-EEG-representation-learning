@@ -12,6 +12,7 @@ from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.decomposition import PCA
 
 from models import EnhancedAttentionLSTM, AttentionLSTMAutoencoder, MaskedAttentionLSTMAutoencoder
+from utils import set_seed
 
 # ============================
 #   DATASETS
@@ -106,7 +107,8 @@ def subject_split_indices(subject_ids, test_subjects, seed=42):
 
 def get_loaders_by_subject(X, y, subject_ids,
                            batch_size,
-                           test_subjects):
+                           test_subjects,
+                           seed=None):
     n_samples = len(X)
     assert len(y) == n_samples
     assert len(subject_ids) == n_samples
@@ -119,8 +121,10 @@ def get_loaders_by_subject(X, y, subject_ids,
     train_ds = EEGSupervisedDataset(X_train, y_train, subjects_train)
     test_ds = EEGSupervisedDataset(X_test, y_test, subjects_test)
 
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
     train_loader = DataLoader(train_ds, batch_size=batch_size,
-                              shuffle=True, drop_last=False)
+                              shuffle=True, drop_last=False,
+                              generator=generator)
     test_loader = DataLoader(test_ds, batch_size=batch_size,
                              shuffle=False)
 
@@ -337,7 +341,8 @@ def main(args):
     train_loader, test_loader = get_loaders_by_subject(
         X_task, y_task, subject_ids_task,
         batch_size=args.batch_size,
-        test_subjects=args.test_subjects
+        test_subjects=args.test_subjects,
+        seed=args.seed
     )
 
     if args.method in ["SimCLR", "AE", "MAE", "TripletLoss"]:
@@ -411,7 +416,9 @@ def main(args):
         subjects_test = test_loader.dataset.subjects
 
         # Overwrite DataLoaders with PCA embeddings
-        train_loader = DataLoader(EEGSupervisedDataset(X_train_pca, y_train, subjects_train), batch_size=args.batch_size, shuffle=True)
+        train_loader = DataLoader(EEGSupervisedDataset(X_train_pca, y_train, subjects_train),
+                                  batch_size=args.batch_size, shuffle=True,
+                                  generator=torch.Generator().manual_seed(args.seed))
         test_loader = DataLoader(EEGSupervisedDataset(X_test_pca, y_test, subjects_test), batch_size=args.batch_size, shuffle=False)
 
         # The model is just the 'Head' that learns from the PCA components
@@ -613,4 +620,5 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    set_seed(args.seed)
     main(args)

@@ -402,6 +402,7 @@ def train_models_per_age(
     hidden_size: int,
     sampling_frequency: int,
     temperature: float,
+    seed: int = 42,
 ):
     """
     Trains one SimCLR model per age (simclr_age_{age}.pth) and saves:
@@ -423,7 +424,8 @@ def train_models_per_age(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            drop_last=True
+            drop_last=True,
+            generator=torch.Generator().manual_seed(seed)
         )
 
         model = EnhancedAttentionLSTM(

@@ -848,7 +848,18 @@ def compute_similarity_matrix(methods_dict):
 
     return sim_matrix.astype(float)
 
-def split_dataset(X, train_percentaje=0.8):
+def set_seed(seed):
+    """Seeds the python, numpy and torch RNGs for reproducible training.
+
+    Args:
+        seed (int): Seed applied to all three generators.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def split_dataset(X, train_percentaje=0.8, seed=None):
     """
     Converts a NumPy array to a Torch tensor and splits it into train/val.
     """
@@ -856,14 +867,18 @@ def split_dataset(X, train_percentaje=0.8):
 
     train_size = int(train_percentaje * X.shape[0])
     val_size = X.shape[0] - train_size
-    return random_split(TensorDataset(data, data), [train_size, val_size])
+    dataset = TensorDataset(data, data)
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    return random_split(dataset, [train_size, val_size], generator=generator)
 
 
-def create_dataloader(train_data, val_data, batch_size=128):
+def create_dataloader(train_data, val_data, batch_size=128, seed=None):
     """
     Creates train and validation dataloaders.
     """
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
+                              generator=generator)
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
 

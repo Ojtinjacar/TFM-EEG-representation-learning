@@ -152,7 +152,7 @@ def extract_representations(X, method, model_path=None, hidden_size=128,
 
     if method == "PCA":
         X_flat = X.reshape(X.shape[0], -1)
-        pca = PCA(n_components=hidden_size)
+        pca = PCA(n_components=hidden_size, random_state=42)
         return pca.fit_transform(X_flat)
 
     # Load model and extract embeddings
