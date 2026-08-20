@@ -183,18 +183,48 @@ def main(args):
 
     # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
-        print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
         keep_mask = ~meta_df['subject'].isin(args.exclude_subjects)
-
+        print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
         X_np = X_np[keep_mask.values]
         meta_df = meta_df[keep_mask].reset_index(drop=True)
         print(f"Number of windows for pre-training after exclusion: {len(X_np)}")
+    else:
+        keep_mask = pd.Series(True, index=range(len(X_np)))
 
     X = torch.tensor(X_np, dtype=torch.float32)
     meta = meta_df.to_numpy()
 
-    full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
-    print(f"Positives=augment aug_mode={args.aug_mode}")
+    if args.positives == "neighbor":
+        from neighbor_positives import NeighborPositiveDataset
+
+        nidx_path = os.path.join(args.neighbor_index_dir, f"neighbor_index_{args.neighbor_metric}.npy")
+        nidx_full = np.load(nidx_path)
+        if nidx_full.shape[0] != len(keep_mask):
+            raise ValueError(
+                f"neighbor_index ({nidx_full.shape[0]}) does not align with the dataset "
+                f"({len(keep_mask)}). The index must be computed over the same set of windows "
+                "(same N and order)."
+            )
+        kept = keep_mask.values
+        g2l = np.full(len(kept), -1, dtype=np.int64)
+        g2l[kept] = np.arange(int(kept.sum()))
+        nidx_local = nidx_full[kept]
+        neighbor_index = np.full_like(nidx_local, -1)
+        valid = nidx_local >= 0
+        neighbor_index[valid] = g2l[nidx_local[valid]]
+
+        view1_augmenter = CIMCYCDataset(X, aug_mode=args.aug_mode)
+        full_dataset = NeighborPositiveDataset(
+            X, neighbor_index, augment=view1_augmenter.augment_sample,
+            augment_anchor=(args.neighbor_view1 == "augmented"), fallback="duplicate",
+            seed=args.seed,
+        )
+        print(f"Positives=neighbor metric={args.neighbor_metric} "
+              f"coverage={full_dataset.coverage():.3f} view1={args.neighbor_view1} "
+              f"aug_mode={args.aug_mode} (aug_mode only affects the fallback when view1=raw)")
+    else:
+        full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
+        print(f"Positives=augment aug_mode={args.aug_mode}")
     train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
                               generator=torch.Generator().manual_seed(args.seed))
     eval_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=False)
@@ -245,6 +275,9 @@ def main(args):
         "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
         "seed": getattr(args, "seed", None),
         "aug_mode": args.aug_mode,
+        "positives": args.positives,
+        "neighbor_metric": args.neighbor_metric if args.positives == "neighbor" else None,
+        "neighbor_index_dir": args.neighbor_index_dir if args.positives == "neighbor" else None,
         "batch_size": args.batch_size,
         "lr": args.lr,
         "weight_decay": args.weight_decay,
@@ -377,6 +410,15 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--neighbor_view1",
+        type=str,
+        default="raw",
+        choices=["raw", "augmented"],
+        help="With --positives neighbor, whether view 1 is the untransformed anchor ('raw', the "
+             "default: the pair is made of two real windows) or the augmented anchor ('augmented', "
+             "the previous behaviour). The augmenter is still used for the fallback.",
+    )
+    parser.add_argument(
         "--aug_mode",
         type=str,
         default="legacy",
@@ -391,6 +433,28 @@ if __name__ == "__main__":
             "Used for view1 when --positives neighbor."
         )
     )
+    parser.add_argument(
+        "--positives",
+        type=str,
+        default="augment",
+        choices=["augment", "neighbor"],
+        help="Positive pair source: 'augment' (two augmentations) or 'neighbor' (view2 = real "
+             "nearest window). See src/neighbor_positives.py."
+    )
+    parser.add_argument(
+        "--neighbor_metric",
+        type=str,
+        default="cosine",
+        choices=["cosine", "wasserstein", "riemann"],
+        help="Distance used to find the neighbor positive (only if --positives neighbor)."
+    )
+    parser.add_argument(
+        "--neighbor_index_dir",
+        type=str,
+        default="data/processed/neighbor_index",
+        help="Directory with neighbor_index_<metric>.npy (from build_neighbor_index.py)."
+    )
+
     parser.add_argument(
         "--seed",
         type=int,
