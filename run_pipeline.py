@@ -70,7 +70,8 @@ def main(args):
                         "--l_freq", str(l_freq),
                         "--h_freq", str(h_freq),
                         "--zones", *zones_for_postprocessing,
-                        "--output_path", processed_data_dir
+                        "--output_path", processed_data_dir,
+                        "--norm_mode", args.norm_mode,
                     ]
                     subprocess.run(post_cmd, check=True, capture_output=True)
 
@@ -239,6 +240,13 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Needed to preprocess?"
+    )
+    parser.add_argument(
+        "--norm_mode",
+        type=str,
+        default="per_channel",
+        choices=["per_channel", "global", "none"],
+        help="Amplitude normalization forwarded to postprocessing.py (per_channel|global|none)."
     )
     args = parser.parse_args()
     main(args)
