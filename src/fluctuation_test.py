@@ -218,7 +218,7 @@ if __name__ == "__main__":
         idx = meta[meta["age"] == age].index.to_numpy()
         X_by_age[age] = X[idx]
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
     repeat_train_and_cluster(
         X=X,

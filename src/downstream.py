@@ -308,7 +308,7 @@ def evaluate_and_plot(
 # ============================
 
 def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Usando dispositivo: {device}")
 
     # Load data

@@ -79,7 +79,7 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
 
 
 def load_model(method, model_path, input_size, n_channels, hidden_size=128,
-               sfreq=250, device='cuda'):
+               sfreq=250, device=None):
     """
     Loads a pre-trained model.
 
@@ -130,7 +130,7 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
 
 
 def extract_representations(X, method, model_path=None, hidden_size=128,
-                           sfreq=250, batch_size=128, device='cuda'):
+                           sfreq=250, batch_size=128, device=None):
     """
     Extracts representations using the specified method.
 
@@ -591,7 +591,7 @@ def main():
             k_per_method[method] = int(k)
 
     # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using device: {device}", flush=True)
 
     # Create output directories

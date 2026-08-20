@@ -94,7 +94,7 @@ class CIMCYCDataset(Dataset):
 
 def main(args):
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     os.makedirs(args.save_dir, exist_ok=True)

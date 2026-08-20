@@ -62,7 +62,7 @@ class TripletDataset(Dataset):
         return anchor_sample, positive_sample, negative_sample
 
 def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Usando dispositivo: {device}")
 
     os.makedirs(args.save_dir, exist_ok=True)

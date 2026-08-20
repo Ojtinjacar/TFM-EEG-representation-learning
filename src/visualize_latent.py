@@ -92,7 +92,7 @@ def get_model_path(method, zone, frequency, save_model_dir="save/models",
 
 
 def load_model(method, model_path, input_size, n_channels, hidden_size=128,
-               sfreq=250, device='cuda', pretrained=False):
+               sfreq=250, device=None, pretrained=False):
     """
     Loads a pre-trained model (backbone only) or fine-tuned model (backbone + head).
 
@@ -143,7 +143,7 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
         return model
 
 
-def extract_embeddings(model, X, batch_size=128, device='cuda'):
+def extract_embeddings(model, X, batch_size=128, device=None):
     """
     Extracts embeddings from the backbone of the fine-tuned model.
 
@@ -256,7 +256,7 @@ def main():
     args = parser.parse_args()
 
     # Configurar dispositivo
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using device: {device}", flush=True)
 
     # Crear directorios de salida

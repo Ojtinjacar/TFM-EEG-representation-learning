@@ -57,7 +57,7 @@ class CNNAutoencoder(nn.Module):
             x = x.unsqueeze(1)  # -> (B, 1, C, T)
             encoded = self.encoder(x)  # -> (B, H, 1, T')
             pooled = F.adaptive_avg_pool2d(encoded, (1, 1))  # -> (B, H, 1, 1)
-            return pooled.view(pooled.size(0), -1)  # -> (B, H)
+            return pooled.reshape(pooled.size(0), -1)
 
 
 class AttentionLSTMAutoencoder(nn.Module):
@@ -137,7 +137,7 @@ class AttentionLSTMAutoencoder(nn.Module):
         x = x.unsqueeze(1)  # (B, 1, C, T)
         x = self.encoder_cnn(x)  # (B, H, 1, T')
         x = x.squeeze(2)         # (B, H, T')
-        x = x.permute(0, 2, 1)   # (B, T', H)
+        x = x.permute(0, 2, 1).contiguous()
 
         lstm_out, _ = self.encoder_lstm(x)  # (B, T', 2*LSTM_H)
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
@@ -148,7 +148,7 @@ class AttentionLSTMAutoencoder(nn.Module):
         x, _ = self.decoder_lstm(embedding)  # (B, T', 2*LSTM_H)
         x = self.reconstruction_layer(x)     # (B, T', H)
 
-        x = x.permute(0, 2, 1).unsqueeze(2)  # (B, H, 1, T')
+        x = x.permute(0, 2, 1).contiguous().unsqueeze(2)
         x = self.decoder_deconv(x)           # (B, C, ?, T)
         x = x.squeeze(2)                     # (B, C, T)
         return x
@@ -321,7 +321,7 @@ class MaskedAttentionLSTMAutoencoder(nn.Module):
         x = x.unsqueeze(1)  # (B, 1, C, T)
         x = self.encoder_cnn(x)  # (B, H, 1, T')
         x = x.squeeze(2)         # (B, H, T')
-        x = x.permute(0, 2, 1)   # (B, T', H)
+        x = x.permute(0, 2, 1).contiguous()
 
         lstm_out, _ = self.encoder_lstm(x)  # (B, T', 2*LSTM_H)
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
@@ -332,7 +332,7 @@ class MaskedAttentionLSTMAutoencoder(nn.Module):
         x, _ = self.decoder_lstm(embedding)  # (B, T', 2*LSTM_H)
         x = self.reconstruction_layer(x)     # (B, T', H)
 
-        x = x.permute(0, 2, 1).unsqueeze(2)  # (B, H, 1, T')
+        x = x.permute(0, 2, 1).contiguous().unsqueeze(2)
         x = self.decoder_deconv(x)           # (B, C, ?, T)
         x = x.squeeze(2)                     # (B, C, T)
         return x
@@ -446,7 +446,7 @@ class EnhancedAttentionLSTM(nn.Module):
         # Reshape for LSTM: (batch, time, channels)
         # Remove the redundant spatial dimension and permute
         x = x.squeeze(2)  # Remove the spatial dimension that was reduced to 1
-        x = x.permute(0, 2, 1)  # (batch, time, channels)
+        x = x.permute(0, 2, 1).contiguous()
 
         # LSTM layer
         lstm_out, _ = self.lstm(x)
