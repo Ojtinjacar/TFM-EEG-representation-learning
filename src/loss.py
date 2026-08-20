@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
@@ -68,3 +69,79 @@ class NTXentLoss(torch.nn.Module):
         labels = torch.zeros(2 * self.batch_size).to(self.device).long()
         loss = self.criterion(logits, labels)
         return loss / (2 * self.batch_size)
+
+def _floor_free_bits(kl_per_dim_batch, free_bits):
+    """Floors the batch-averaged per-dimension KL, per Kingma et al. (2016)."""
+    if free_bits and free_bits > 0.0:
+        return torch.clamp(kl_per_dim_batch, min=free_bits)
+    return kl_per_dim_batch
+
+
+class LatentPrior:
+    """Interface for the latent prior p(z).
+
+    ``kl_divergence`` is the term entering the objective, ``kl_true`` the
+    actual divergence to report; they differ only under free bits.
+    """
+
+    def kl_divergence(self, mu, logvar, free_bits=0.0):
+        """Returns the KL term of the objective, possibly floored."""
+        raise NotImplementedError
+
+    def kl_true(self, mu, logvar):
+        """Returns the actual KL divergence, never floored."""
+        raise NotImplementedError
+
+    def to(self, *args, **kwargs):
+        return self
+
+
+class StandardNormalPrior(LatentPrior):
+    """Standard normal prior p(z) = N(0, I), Kingma & Welling (2014) app. B::
+
+        KL = -0.5 * sum_j (1 + logvar_j - mu_j^2 - exp(logvar_j))
+
+    The encoder emits log-variance, not log standard deviation.
+    """
+
+    def _kl_per_dim(self, mu, logvar):
+        """Returns the per-sample, per-dimension KL, shape (B, D)."""
+        return 0.5 * (mu.pow(2) + logvar.exp() - 1.0 - logvar)
+
+    def kl_true(self, mu, logvar):
+        """Returns the KL summed over dimensions and averaged over the batch."""
+        return self._kl_per_dim(mu, logvar).sum(dim=1).mean()
+
+    def kl_divergence(self, mu, logvar, free_bits=0.0):
+        """Returns the objective KL; equals kl_true when free_bits is zero."""
+        kl_per_dim_batch = self._kl_per_dim(mu, logvar).mean(dim=0)
+        return _floor_free_bits(kl_per_dim_batch, free_bits).sum()
+
+
+def vae_elbo(reconstruction, x, mu, logvar, prior, beta, free_bits=0.0):
+    """Returns the negative ELBO to minimize, in code scale.
+
+    Args:
+        beta (float): KL weight already in code scale, not canonical units.
+
+    Returns:
+        tuple: (total, recon, kl_objective, kl_true). Backpropagate ``total``
+        and report ``kl_true``; the two KLs coincide without free bits.
+    """
+    recon = F.mse_loss(reconstruction, x, reduction="mean")
+    kl_objective = prior.kl_divergence(mu, logvar, free_bits=free_bits)
+    kl_true = prior.kl_true(mu, logvar)
+    total = recon + beta * kl_objective
+    return total, recon, kl_objective, kl_true
+
+
+def build_prior(prior_type):
+    if prior_type == "standard":
+        return StandardNormalPrior()
+    raise ValueError(f"Unknown prior_type: {prior_type!r} (use 'standard').")
+
+
+def kl_beta(epoch, target_beta, anneal_epochs):
+    if anneal_epochs <= 0:
+        return target_beta
+    return target_beta * min(1.0, epoch / anneal_epochs)

@@ -12,6 +12,7 @@ Supported methods: PCA, SimCLR, AE, MAE, TripletLoss
 """
 
 import os
+import glob
 import argparse
 
 import numpy as np
@@ -30,7 +31,8 @@ from models import (
     EnhancedAttentionLSTM,
     CNNAutoencoder,
     AttentionLSTMAutoencoder,
-    MaskedAttentionLSTMAutoencoder
+    MaskedAttentionLSTMAutoencoder,
+    VariationalAttentionLSTMAutoencoder,
 )
 from utils import (
     found_k_clusters,
@@ -42,7 +44,7 @@ from utils import (
 )
 
 # Available methods
-AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss"]
+AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 
 
 def get_model_path(method, zone, frequency, target=None, save_model_dir="save/models"):
@@ -72,6 +74,12 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
         if target is None:
             raise ValueError("TripletLoss requires a target to be specified")
         filename = f"Triplet_{target}_{zone}_{frequency}_emb128_m0.4.pth"
+    elif method == "VAE":
+        pattern = os.path.join(save_model_dir, f"{method}_{zone}_{frequency}*.pth")
+        matches = glob.glob(pattern)
+        if not matches:
+            return None
+        return max(matches, key=os.path.getmtime)
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -119,10 +127,22 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
             sfreq=sfreq,
             lstm_hidden_size=hidden_size // 2
         )
+    elif method == "VAE":
+        model = VariationalAttentionLSTMAutoencoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            n_channels=n_channels,
+            sfreq=sfreq,
+            lstm_hidden_size=hidden_size // 2
+        )
     else:
         raise ValueError(f"Unknown method for model loading: {method}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    state_dict = torch.load(model_path, map_location=device)
+    if method == "VAE":
+        # The latent prior holds no weights needed for inference.
+        state_dict = {k: v for k, v in state_dict.items() if not k.startswith("prior.")}
+    model.load_state_dict(state_dict, strict=True)
     model.to(device)
     model.eval()
 

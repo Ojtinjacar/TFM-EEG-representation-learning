@@ -17,12 +17,14 @@ from checkpoint_naming import (
     mae_checkpoint_name,
     simclr_checkpoint_name,
     triplet_checkpoint_name,
+    vae_checkpoint_name,
 )
+from train_vae import BETA_CONVENTION
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
-LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss"]
-FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss"]
+LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
+FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 
 _NIDX_SESSION   = "data/processed/neighbor_index"
 _NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"
@@ -99,7 +101,8 @@ def config_data_paths(zone, frequency):
 
 
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False,
-                    allow_legacy=False, seed=42, simclr_flags=None, simclr_tag=""):
+                    allow_legacy=False, seed=42, simclr_flags=None, simclr_tag="",
+                    vae_beta=1.0, vae_free_bits=0.0):
     """
     Constructs and runs a single call to pretraining script, excluding test subjects.
     Returns the path to the trained model.
@@ -157,6 +160,28 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     elif method == "TripletLoss":
         model_filename = triplet_checkpoint_name(target, zone, frequency, fold_id)
         expected.update({"method": "TripletLoss", "fold_id": fold_id, "target": target})
+    elif method == "VAE":
+        model_filename = vae_checkpoint_name(
+            method, zone, frequency, fold_id,
+            beta=vae_beta, prior="standard", free_bits=vae_free_bits,
+        )
+        expected.update({
+            "method": method,
+            "fold_id": fold_id,
+            "beta": vae_beta,
+            # Two checkpoints can carry the same beta under different objectives,
+            # so the convention is part of what has to match to reuse one.
+            "beta_convention": BETA_CONVENTION,
+            "prior": "standard",
+            "free_bits": vae_free_bits,
+            "lr": 1e-3,
+        })
+        if allow_legacy:
+            # Legacy VAE checkpoints share this filename pattern but their beta is
+            # in the pre-rescaling scale: the same name, a different objective.
+            print(f"  > [REUSE] {method}: legacy reuse disabled for the VAE "
+                  f"(incompatible beta scale).")
+            allow_legacy = False
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
@@ -197,6 +222,14 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--block-size", "25",  # 100ms @ 250Hz
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
+    elif method == "VAE":
+        command = [
+            "python", "src/train_vae.py",
+            "--zone", zone,
+            "--frequency", frequency,
+            "--fold_id", fold_id,
+            "--exclude_subjects"
+        ] + [str(s) for s in test_subjects]
     elif method == "TripletLoss":
         command = [
             "python", "src/train_triplet_loss.py",
@@ -207,9 +240,11 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
 
-    if method in ("AE", "MAE"):
+    if method in ("AE", "MAE", "VAE"):
         win_path, meta_path = config_data_paths(zone, frequency)
         command += ["--data-path", win_path, "--meta-path", meta_path]
+    if method == "VAE":
+        command += ["--beta", str(vae_beta), "--free-bits", str(vae_free_bits)]
 
     command += ["--seed", str(seed)]
 
@@ -381,7 +416,23 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["MAE"] = None
 
-    # 1.4 Pre-train TripletLoss for each target (depends on target)
+    # 1.4 Pre-train VAE (once, independent of target)
+    if _use("VAE"):
+        print(f"\n  Pre-training VAE (variational self-supervised, beta={args.vae_beta})...", flush=True)
+        pretrained_models["VAE"] = run_pretraining(
+            method="VAE",
+            target=None,
+            zone=args.zone,
+            frequency=args.frequency,
+            test_subjects=test_subjects,
+            fold_id=fold_id,
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            vae_beta=args.vae_beta, vae_free_bits=args.vae_free_bits,
+        )
+    else:
+        pretrained_models["VAE"] = None
+
+    # 1.5 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
         if not _use("TripletLoss"):
             pretrained_models[f"TripletLoss_{target}"] = None
@@ -446,6 +497,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path = pretrained_models["AE"]
                 elif method == "MAE":
                     model_path = pretrained_models["MAE"]
+                elif method == "VAE":
+                    model_path = pretrained_models["VAE"]
                 elif method == "TripletLoss":
                     model_path = pretrained_models[f"TripletLoss_{target}"]
                 else:  # PCA o supervised
@@ -854,6 +907,20 @@ if __name__ == "__main__":
         "--allow_legacy",
         action="store_true",
         help="Allow reusing checkpoints whose sidecar is a backfilled legacy record."
+    )
+    parser.add_argument(
+        "--vae_beta",
+        type=float,
+        default=1.0,
+        help="KL weight for the VAE pretraining, under the strict gaussian ELBO "
+             "where the reconstruction carries a factor of one half: beta=1 is "
+             "the textbook VAE. train_vae.py rescales it to 2*beta/(C*T)."
+    )
+    parser.add_argument(
+        "--vae_free_bits",
+        type=float,
+        default=0.0,
+        help="Per-dimension KL floor (nats) for VAE pretraining."
     )
     parser.add_argument(
         "--methods",

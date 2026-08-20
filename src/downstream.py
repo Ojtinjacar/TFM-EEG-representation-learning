@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.decomposition import PCA
 
-from models import EnhancedAttentionLSTM, AttentionLSTMAutoencoder, MaskedAttentionLSTMAutoencoder
+from models import (EnhancedAttentionLSTM, AttentionLSTMAutoencoder,
+                    MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder)
 from utils import set_seed
 
 # ============================
@@ -345,7 +346,7 @@ def main(args):
         seed=args.seed
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
@@ -365,12 +366,19 @@ def main(args):
             "SimCLR": EnhancedAttentionLSTM,
             "AE": AttentionLSTMAutoencoder,
             "MAE": MaskedAttentionLSTMAutoencoder,
+            "VAE": VariationalAttentionLSTMAutoencoder,
             "TripletLoss": EnhancedAttentionLSTM
         }
         model_class = model_map.get(args.method)
         
         backbone = model_class(**model_params).to(device)
-        backbone.load_state_dict(torch.load(args.model_path, map_location=device))
+        state_dict = torch.load(args.model_path, map_location=device)
+        if args.method == "VAE":
+            # The latent prior has no parameters to restore for inference; drop its
+            # keys and load the rest strictly, so a genuine mismatch still fails.
+            state_dict = {k: v for k, v in state_dict.items()
+                          if not k.startswith("prior.")}
+        backbone.load_state_dict(state_dict, strict=True)
         print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
 
         # 2) Build full model and optionally freeze backbone
@@ -589,7 +597,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE"],
         required=True,
         help="Method to use."
     )

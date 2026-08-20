@@ -65,6 +65,29 @@ def triplet_checkpoint_name(target, zone, frequency, fold_id,
             f"_emb{embedding_size}_m{margin}.pth")
 
 
+def vae_checkpoint_name(tag, zone, frequency, fold_id, beta, prior, free_bits,
+                        hidden_size=128, epochs=100):
+    """Returns the VAE-family checkpoint filename.
+
+    Args:
+        tag (str): Method tag (normally "VAE").
+        zone (str): Head zone of the processed data.
+        frequency (str): Frequency band of the processed data.
+        fold_id (str | None): Fold identifier.
+        beta (float): KL weight exactly as passed on the CLI.
+        prior (str): Latent prior name ("standard").
+        free_bits (float): Per-dimension KL floor.
+        hidden_size (int): Encoder width and latent size.
+        epochs (int): Training epochs.
+
+    Returns:
+        str: Checkpoint filename (no directory).
+    """
+    return (f"{tag}_{zone}_{frequency}{_fold_suffix(fold_id)}"
+            f"_hidden{hidden_size}_beta{beta}_prior{prior}"
+            f"_fb{free_bits}_e{epochs}.pth")
+
+
 def sidecar_path(checkpoint_path):
     """Returns the sidecar JSON path for a checkpoint path."""
     return str(checkpoint_path).replace(".pth", "_config.json")
