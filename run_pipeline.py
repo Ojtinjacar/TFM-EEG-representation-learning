@@ -87,7 +87,8 @@ def main(args):
                             "--zone", zone,
                             "--frequency", band_name,
                             "--save_dir", MODEL_SAVE_DIR,
-                            "--plot_dir", os.path.join(FIGURE_SAVE_DIR, "pretrain")
+                            "--plot_dir", os.path.join(FIGURE_SAVE_DIR, "pretrain"),
+                            "--aug_mode", args.aug_mode,
                         ]
                     elif args.method == "AE":
                         train_script = "src/train_auto.py"
@@ -247,6 +248,15 @@ if __name__ == "__main__":
         default="per_channel",
         choices=["per_channel", "global", "none"],
         help="Amplitude normalization forwarded to postprocessing.py (per_channel|global|none)."
+    )
+    parser.add_argument(
+        "--aug_mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving",
+                 "psd_ftsurrogate", "psd_smoothmask", "psd_signflip", "psd_timereverse", "psd_top2"],
+        help="Augmentation strategy forwarded to train_simclr.py "
+             "(legacy|no_swap|legacy_plus_psd|zone_preserving|psd_*)."
     )
     args = parser.parse_args()
     main(args)

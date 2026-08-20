@@ -1,5 +1,6 @@
 import os
-import argparse 
+import sys
+import argparse
 import numpy as np 
 import pandas as pd
 
@@ -14,9 +15,9 @@ from loss import NTXentLoss
 from models import EnhancedAttentionLSTM
     
 class CIMCYCDataset(Dataset):
-
-    def __init__(self, X):
+    def __init__(self, X, aug_mode="legacy"):
         self.X = torch.FloatTensor(X)
+        self.aug_mode = aug_mode
 
     def __len__(self):
         return len(self.X)
@@ -30,6 +31,11 @@ class CIMCYCDataset(Dataset):
         return anchor, aug1, aug2
 
     def augment_sample(self, sample):
+        if self.aug_mode == "legacy":
+            return self._augment_legacy(sample)
+        return self._augment_composed(sample)
+
+    def _augment_legacy(self, sample):
         augmented = sample.clone()
         
         spatial_augmentations = [
@@ -94,6 +100,74 @@ class CIMCYCDataset(Dataset):
         scale = torch.FloatTensor(1).uniform_(*scale_range)
         return sample * scale
 
+    def _pools_for_mode(self):
+        dropout = [self.apply_channel_dropout]
+        dropout_swap = [self.apply_channel_dropout, self.apply_channel_swap]
+        legacy_temporal = [self.apply_time_shift, self.add_gaussian_noise, self.apply_zero_masking]
+        psd_temporal = [
+            self.apply_time_shift,
+            self.add_gaussian_noise,
+            self.apply_smooth_time_mask,
+            self.apply_ft_surrogate,
+            self.apply_sign_flip,
+            self.apply_time_reverse,
+        ]
+        top2_temporal = [self.apply_ft_surrogate, self.apply_time_reverse]
+        pools = {
+            "no_swap": (dropout, legacy_temporal),
+            "legacy_plus_psd": (dropout_swap, psd_temporal),
+            "zone_preserving": (dropout, psd_temporal),
+            "psd_ftsurrogate": (dropout, [self.apply_ft_surrogate]),
+            "psd_smoothmask": (dropout, [self.apply_smooth_time_mask]),
+            "psd_signflip": (dropout, [self.apply_sign_flip]),
+            "psd_timereverse": (dropout, [self.apply_time_reverse]),
+            "psd_top2": (dropout, top2_temporal),
+        }
+        return pools[self.aug_mode]
+
+    def _augment_composed(self, sample, max_retries=3, min_correlation=0.3):
+        spatial_pool, tempfreq_pool = self._pools_for_mode()
+        validation_exempt = (self.apply_ft_surrogate, self.apply_sign_flip, self.apply_time_reverse)
+
+        last = sample.clone()
+        for _ in range(max_retries):
+            candidate = sample.clone()
+            candidate = spatial_pool[np.random.randint(len(spatial_pool))](candidate)
+            tf = tempfreq_pool[np.random.randint(len(tempfreq_pool))]
+            candidate = tf(candidate)
+            last = candidate
+            if tf in validation_exempt or self.validate_augmentation(sample, candidate, min_correlation):
+                return candidate
+        return last
+
+    def apply_ft_surrogate(self, sample, phase_noise_max=None):
+        if phase_noise_max is None:
+            phase_noise_max = 0.9 * float(np.pi)
+        n_times = sample.shape[1]
+        spectrum = torch.fft.rfft(sample, dim=1)
+        n_freqs = spectrum.shape[1]
+        dphi = torch.empty(n_freqs).uniform_(0.0, phase_noise_max)
+        dphi[0] = 0.0
+        phase = torch.exp(1j * dphi).unsqueeze(0)
+        surrogate = torch.fft.irfft(spectrum * phase, n=n_times, dim=1)
+        return surrogate.to(sample.dtype)
+
+    def apply_smooth_time_mask(self, sample, mask_len_ratio=0.15, sharpness=10.0):
+        n_times = sample.shape[1]
+        mask_len = max(1, int(n_times * mask_len_ratio))
+        t_cut = torch.randint(0, max(1, n_times - mask_len), (1,)).item()
+        t = torch.arange(n_times, dtype=sample.dtype)
+        rise = torch.sigmoid(sharpness * (t - t_cut))
+        fall = torch.sigmoid(sharpness * (t_cut + mask_len - t))
+        keep = 1.0 - rise * fall
+        return sample * keep.unsqueeze(0)
+
+    def apply_time_reverse(self, sample):
+        return torch.flip(sample, dims=[1])
+
+    def apply_sign_flip(self, sample):
+        return -sample
+
 def main(args):
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -119,8 +193,8 @@ def main(args):
     X = torch.tensor(X_np, dtype=torch.float32)
     meta = meta_df.to_numpy()
 
-    # Create datasets using subsets
-    full_dataset = CIMCYCDataset(X)
+    full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
+    print(f"Positives=augment aug_mode={args.aug_mode}")
     train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
                               generator=torch.Generator().manual_seed(args.seed))
     eval_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=False)
@@ -170,6 +244,7 @@ def main(args):
         "fold_id": args.fold_id,
         "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
         "seed": getattr(args, "seed", None),
+        "aug_mode": args.aug_mode,
         "batch_size": args.batch_size,
         "lr": args.lr,
         "weight_decay": args.weight_decay,
@@ -301,6 +376,21 @@ if __name__ == "__main__":
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
 
+    parser.add_argument(
+        "--aug_mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "no_swap", "legacy_plus_psd", "zone_preserving",
+                 "psd_ftsurrogate", "psd_smoothmask", "psd_signflip", "psd_timereverse", "psd_top2"],
+        help=(
+            "Augmentation strategy: 'legacy' (original: channel dropout/swap + "
+            "time shift/gaussian/zero-mask); 'zone_preserving' (drops channel swap, adds "
+            "PSD-preserving transforms FTSurrogate/SmoothTimeMask/SignFlip/TimeReverse and "
+            "enables the correlation validation). The 'psd_*' modes are the fine ablation: "
+            "dropout + a single transform ('psd_top2' = the two winners). "
+            "Used for view1 when --positives neighbor."
+        )
+    )
     parser.add_argument(
         "--seed",
         type=int,
