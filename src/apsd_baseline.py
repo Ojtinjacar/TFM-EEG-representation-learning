@@ -45,7 +45,7 @@ PRESET_ZONES = {
 
 # Frequency bands (user-specified)
 FREQ_BANDS = {
-    "delta": (0.5, 3),
+    "delta": (1.0, 3),
     "theta": (3, 6),
     "alpha": (6, 9),
     "beta": (9, 20),
