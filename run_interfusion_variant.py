@@ -136,7 +136,6 @@ def pretrain_fold(args, fold_id, test_subjects, seed, model_dir):
         "rnn_hidden": args.rnn_hidden,
         "dense_hidden": args.dense_hidden,
         "flow_levels": args.flow_levels,
-        "free_bits": args.free_bits,
         "strides": list(args.strides),
         "z_dim": args.z_dim,
         "seed": seed,
@@ -163,7 +162,6 @@ def pretrain_fold(args, fold_id, test_subjects, seed, model_dir):
         "--rnn-hidden", str(args.rnn_hidden),
         "--dense-hidden", str(args.dense_hidden),
         "--flow-levels", str(args.flow_levels),
-        "--free-bits", str(args.free_bits),
         "--strides", *[str(s) for s in args.strides],
         "--pretrain-epochs", str(args.pretrain_epochs),
         "--epochs", str(args.epochs),
@@ -300,8 +298,11 @@ def parse_args():
                         help="Feature/fusion dense units (paper: 500).")
     parser.add_argument("--flow-levels", type=int, default=20,
                         help="RealNVP levels on q(z1) (paper: 20).")
-    parser.add_argument("--free-bits", type=float, default=0.0,
-                        help="Per-element KL floor (nats) on z1 (A3 variant).")
+    # No --free-bits: src/train_interfusion.py has no such flag, so passing it
+    # killed every run with exit 2. A KL floor could not help anyway, since the
+    # clamp has zero gradient below the threshold: it lifts the pressure that
+    # drives z1 to collapse but exerts none towards using a latent the
+    # reconstruction does not need.
     parser.add_argument("--strides", type=int, nargs="+", default=[2, 1, 2, 1, 2, 2, 2],
                         help="Conv-stack strides; controls W'.")
     parser.add_argument("--z-dim", type=int, default=4,
