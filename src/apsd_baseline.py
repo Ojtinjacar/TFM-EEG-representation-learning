@@ -26,22 +26,18 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, LeaveOneOut
 from sklearn.metrics import mean_squared_error, r2_score
 
+from montage import (
+    PRESET_ZONES,
+    load_channel_names,
+    resolve_processed_montage,
+    roi_indices as montage_roi_indices,
+)
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-# ROI definitions (from postprocessing.py)
-PRESET_ZONES = {
-    "central": ['E35', 'E29', 'E13', 'E6', 'E112', 'E111', 'E110', 'E41', 'E36', 'E30',
-                'E7', 'E106', 'E105', 'E104', 'E103', 'E47', 'E42', 'E37', 'E31', 'Cz',
-                'E80', 'E87', 'E93', 'E98', 'E54', 'E55', 'E79'],
-    "frontal": ['E33', 'E34', 'E27', 'E23', 'E18', 'E16', 'E10', 'E3', 'E123', 'E116',
-                'E122', 'E28', 'E24', 'E19', 'E11', 'E4', 'E124', 'E117', 'E20', 'E12',
-                'E5', 'E118'],
-    "parietal": ['E52', 'E53', 'E61', 'E62', 'E78', 'E86', 'E60', 'E67', 'E72', 'E77',
-                 'E85', 'E92', 'E59', 'E91'],
-    "occipital": ['E66', 'E71', 'E76', 'E84', 'E70', 'E75', 'E83']
-}
+# ROI definitions live in montage.py, imported above.
 
 # Frequency bands (user-specified)
 FREQ_BANDS = {
@@ -70,22 +66,9 @@ ALPHA_PEAK_RANGE = (5, 12)  # Hz, broader for infants
 # HELPER FUNCTIONS
 # =============================================================================
 
-def load_channel_names(channels_txt):
-    """Load channel names from text file."""
-    with open(channels_txt) as f:
-        return [line.strip() for line in f.readlines()]
-
-
 def get_roi_channel_indices(all_channels):
-    """
-    Get channel indices for each ROI.
-    Returns dict: {roi_name: [indices]}
-    """
-    roi_indices = {}
-    for roi_name, roi_channels in PRESET_ZONES.items():
-        indices = [i for i, ch in enumerate(all_channels) if ch in roi_channels]
-        roi_indices[roi_name] = indices
-    return roi_indices
+    """Returns {roi_name: [channel indices]} for a montage of known size."""
+    return montage_roi_indices(all_channels, len(all_channels))
 
 
 def compute_psd(signal, sfreq, nperseg=None):
@@ -520,16 +503,12 @@ def main(args):
     print(f"  Metadata shape: {meta.shape}")
     print(f"  Subjects: {meta['subject'].nunique()}")
 
-    # Load channel names
-    all_channels = load_channel_names(args.channels_txt)
-    print(f"  Channels in file: {len(all_channels)}")
-
-    # Determine actual channels in data
-    n_channels_data = X.shape[1]
-    if n_channels_data != len(all_channels):
-        print(f"  [WARNING] Data has {n_channels_data} channels but file has {len(all_channels)}")
-        print(f"  Using first {n_channels_data} channels from file")
-        all_channels = all_channels[:n_channels_data]
+    # Montage of the processed dataset. Read, never guessed: the channel
+    # selection keeps channels by region membership, so truncating the full
+    # montage to the channel count misassigns every region.
+    all_channels = resolve_processed_montage(
+        args.data_path, X.shape[1], channels_txt=args.channels_txt)
+    print(f"  Channels in montage: {len(all_channels)}")
 
     # Get ROI indices
     roi_indices = get_roi_channel_indices(all_channels)
@@ -698,8 +677,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--channels_txt",
         type=str,
-        default="data/raw/channel_names.txt",
-        help="Path to channel names text file."
+        default=None,
+        help="Montage of the dataset. Defaults to the channel_names.txt written "
+             "next to the windows by postprocessing.py."
     )
     parser.add_argument(
         "--targets",

@@ -30,7 +30,12 @@ import pandas as pd
 # Everything this builder needs lives in this repo, next to it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from apsd_baseline import PRESET_ZONES  # noqa: E402
+from montage import (  # noqa: E402
+    MONTAGE_SIDECAR,
+    PRESET_ZONES,
+    load_channel_names,
+    resolve_processed_montage,
+)
 from epoch_features import compute_epoch_features, compute_epoch_roi_psd  # noqa: E402
 from neighbor_positives import (  # noqa: E402
     VALID_METRICS,
@@ -114,10 +119,11 @@ def _diagnostics(table: pd.DataFrame, meta: pd.DataFrame, n_total: int) -> dict:
 def main(args) -> None:
     X = np.load(args.data_path, mmap_mode="r")
     meta = pd.read_csv(args.meta_path).reset_index(drop=True)  # index == position in X
-    all_channels = load_channel_names(args.channels_txt)
-    n_ch_data = X.shape[1]
-    if len(all_channels) != n_ch_data:
-        all_channels = all_channels[:n_ch_data]
+    # Read the montage of the processed dataset instead of guessing it: the
+    # channels were kept by region membership, so the full montage truncated to
+    # the channel count describes a different set of electrodes.
+    all_channels = resolve_processed_montage(
+        args.data_path, X.shape[1], channels_txt=args.channels_txt)
     roi_indices = roi_indices_from_channels(all_channels)
     sfreq = X.shape[-1] / args.seconds
     n_total = len(X)
@@ -158,6 +164,10 @@ def main(args) -> None:
     # Persist metadata subset used for alignment checks and the diagnostics.
     meta[["subject", "age", "epoch_index", "block"]].to_csv(
         os.path.join(args.output_dir, "neighbor_index_meta.csv"), index=False)
+    # An index built before the montage fix carries no record of the electrodes
+    # it used; from here on it states them.
+    with open(os.path.join(args.output_dir, MONTAGE_SIDECAR), "w") as fh:
+        fh.write("\n".join(all_channels) + "\n")
     pd.DataFrame(diag_rows).to_csv(
         os.path.join(args.output_dir, "neighbor_index_diagnostics.csv"), index=False)
     print("[neighbor_index] done.")
@@ -167,7 +177,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Precompute neighbor-positive indices for SSL.")
     parser.add_argument("--data_path", type=str, required=True)
     parser.add_argument("--meta_path", type=str, required=True)
-    parser.add_argument("--channels_txt", type=str, default="data/raw/channel_names.txt")
+    parser.add_argument("--channels_txt", type=str, default=None,
+                        help="Montage of the dataset. Defaults to the channel_names.txt written next to the windows by postprocessing.py.")
     parser.add_argument("--output_dir", type=str, default="data/processed/neighbor_index")
     parser.add_argument("--metrics", nargs="+", default=list(VALID_METRICS),
                         choices=list(VALID_METRICS))

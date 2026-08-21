@@ -42,9 +42,9 @@ from neighbor_positives import VALID_METRICS, _session_distance_matrix, neighbor
 from build_neighbor_index import (  # noqa: E402
     compute_covariances,
     compute_feat_z,
-    load_channel_names,
     roi_indices_from_channels,
 )
+from montage import load_channel_names, resolve_processed_montage  # noqa: E402
 
 _STRATEGIES = {
     # strategy: (group_cols_base, exclude_column)  -- candidate must DIFFER in exclude_column
@@ -133,9 +133,8 @@ def _diagnostics(table, meta, n_total):
 def main(args):
     X = np.load(args.data_path, mmap_mode="r")
     meta = pd.read_csv(args.meta_path).reset_index(drop=True)
-    all_channels = load_channel_names(args.channels_txt)
-    if len(all_channels) != X.shape[1]:
-        all_channels = all_channels[:X.shape[1]]
+    all_channels = resolve_processed_montage(
+        args.data_path, X.shape[1], channels_txt=args.channels_txt)
     roi_indices = roi_indices_from_channels(all_channels)
     sfreq = X.shape[-1] / args.seconds
     n_total = len(X)
@@ -187,7 +186,8 @@ if __name__ == "__main__":
     p.add_argument("--strategy", required=True, choices=list(_STRATEGIES))
     p.add_argument("--data_path", required=True)
     p.add_argument("--meta_path", required=True)
-    p.add_argument("--channels_txt", default="data/raw/channel_names.txt")
+    p.add_argument("--channels_txt", default=None,
+                   help="Montage of the dataset. Defaults to the channel_names.txt written next to the windows by postprocessing.py.")
     p.add_argument("--output_dir", required=True)
     p.add_argument("--metrics", nargs="+", default=list(VALID_METRICS), choices=list(VALID_METRICS))
     p.add_argument("--k", type=int, default=2)

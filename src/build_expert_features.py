@@ -48,12 +48,8 @@ import numpy as np
 import pandas as pd
 from scipy.signal import welch
 
-from apsd_baseline import (
-    FREQ_BANDS,
-    PRESET_ZONES,
-    extract_specparam_features,
-    load_channel_names,
-)
+from apsd_baseline import FREQ_BANDS, extract_specparam_features
+from montage import PRESET_ZONES, MontageError, load_channel_names
 from epoch_features import EPS, PSD_NPERSEG, SFREQ, _bandpower, find_paf
 
 ROIS = ["frontal", "central", "parietal", "occipital"]
@@ -83,7 +79,7 @@ QUALITY_COLS = [f"apsd_r2_{roi}" for roi in ROIS]
 AMPLITUDE_UNIT_SCALE = (0.5, 2.0)
 
 
-class DescriptorAlignmentError(RuntimeError):
+class DescriptorAlignmentError(MontageError):
     """Raised when the descriptor cannot be matched to the window metadata."""
 
 

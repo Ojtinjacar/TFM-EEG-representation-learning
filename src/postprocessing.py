@@ -5,12 +5,12 @@ import json
 import os
 from mne.filter import filter_data
 
-PRESET_ZONES = {
-    "central" : ['E35', 'E29', 'E13', 'E6', 'E112', 'E111', 'E110', 'E41', 'E36', 'E30', 'E7', 'E106', 'E105', 'E104', 'E103', 'E47', 'E42', 'E37', 'E31', 'Cz', 'E80', 'E87', 'E93', 'E98', 'E54', 'E55', 'E79'],
-    "frontal" : ['E33', 'E34', 'E27', 'E23', 'E18', 'E16', 'E10', 'E3', 'E123', 'E116', 'E122', 'E28', 'E24', 'E19', 'E11', 'E4', 'E124', 'E117', 'E20', 'E12','E5', 'E118' ],
-    "parietal" : ['E52', 'E53', 'E61', 'E62', 'E78', 'E86', 'E60', 'E67', 'E72', 'E77', 'E85', 'E92', 'E59', 'E91'],
-    "occipital" : ['E66', 'E71', 'E76', 'E84', 'E70', 'E75', 'E83']  
-}
+from montage import (
+    MONTAGE_SIDECAR,
+    PRESET_ZONES,
+    load_channel_names,
+    select_channel_indices,
+)
 
 # Metadata map
 COLUMN_MAP = {
@@ -51,12 +51,8 @@ COLUMN_MAP = {
 }
 
 def get_channel_indices(zones, all_channels):
-    selected = set()
-    for zone in zones:
-        if zone not in PRESET_ZONES:
-            raise ValueError(f"Zone {zone} not found. Available zones: {list(PRESET_ZONES.keys())}")
-        selected.update(PRESET_ZONES[zone])
-    return [i for i, ch in enumerate(all_channels) if ch in selected]
+    """Returns the indices of the channels belonging to the given zones."""
+    return select_channel_indices(zones, all_channels)
 
 def apply_windows(X, meta, sfreq, window_sec):
     samples_per_window = int(window_sec * sfreq)
@@ -102,13 +98,16 @@ def main(args):
     # Merge both metadata dataframes
     meta = meta.merge(socio_meta, on="subject", how="left")
 
-    with open(args.channels_txt) as f:
-        all_channels = [line.strip() for line in f.readlines()]
+    all_channels = load_channel_names(args.channels_txt)
 
-    # Channel selection
+    # Channel selection. The kept names travel with the output: the selection is
+    # by region membership, so it cannot be recovered from the channel count.
     if args.zones:
         indices = get_channel_indices(args.zones, all_channels)
         X = X[:, indices, :]
+        kept_channels = [all_channels[i] for i in indices]
+    else:
+        kept_channels = list(all_channels)
 
     # Frequency filtering
     SFREQ = X.shape[-1] / args.seconds 
@@ -160,9 +159,15 @@ def main(args):
 
     # Provenance manifest: without it there is no way to know afterwards which
     # normalization/band/zones produced a processed directory.
+    sidecar = os.path.join(args.output_path, MONTAGE_SIDECAR)
+    with open(sidecar, "w") as fh:
+        fh.write("\n".join(kept_channels) + "\n")
+    print(f"[postprocessing] Montage of {len(kept_channels)} channels written to {sidecar}")
+
     manifest = {
         "args": {k: (str(v) if isinstance(v, os.PathLike) else v)
                  for k, v in vars(args).items()},
+        "channels": kept_channels,
         "input_file": os.path.abspath(args.data_path),
         "input_size_bytes": os.path.getsize(args.data_path),
         "input_mtime": os.path.getmtime(args.data_path),
