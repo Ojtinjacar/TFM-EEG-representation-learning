@@ -48,6 +48,43 @@ def _bandpower(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> floa
     return float(_trapz(psd[mask], freqs[mask])) if mask.any() else 0.0
 
 
+ALPHA_RANGE: tuple[float, float] = (5.0, 12.0)
+
+
+def find_paf(freqs, psd, alpha_range=ALPHA_RANGE, peak_threshold=1.05):
+    """Finds the peak alpha frequency after removing the aperiodic component.
+
+    Fits a straight line to the log-log spectrum between 1 and 40 Hz, divides the PSD by
+    that 1/f estimate, and takes the maximum of the flattened spectrum inside the alpha
+    range. The alpha range is wide (5-12 Hz) because the alpha peak of an infant sits well
+    below the adult one and migrates upwards with age.
+
+    Args:
+        freqs (np.ndarray): Frequency bins of the PSD.
+        psd (np.ndarray): Power spectral density.
+        alpha_range (tuple): Lower and upper bound of the alpha search (Hz).
+        peak_threshold (float): Minimum flattened amplitude for a peak to count as real.
+
+    Returns:
+        tuple: (peak frequency, flattened peak amplitude), both NaN when no peak clears
+            the threshold.
+    """
+    mask_fit = (freqs > 1) & (freqs < 40)
+    log_f = np.log10(freqs[mask_fit])
+    log_p = np.log10(psd[mask_fit] + EPS)
+    slope, intercept = np.polyfit(log_f, log_p, 1)
+    aperiodic = 10 ** (slope * np.log10(freqs + 1e-12) + intercept)
+    flat = psd / (aperiodic + EPS)
+    mask_a = (freqs >= alpha_range[0]) & (freqs <= alpha_range[1])
+    if not mask_a.any():
+        return np.nan, np.nan
+    fa, pa = freqs[mask_a], flat[mask_a]
+    if pa.max() < peak_threshold:
+        return np.nan, np.nan
+    k = int(np.argmax(pa))
+    return float(fa[k]), float(pa[k])
+
+
 def compute_epoch_features(
     X: np.ndarray,
     meta: pd.DataFrame,

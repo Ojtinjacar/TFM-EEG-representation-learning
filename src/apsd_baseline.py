@@ -138,7 +138,12 @@ def compute_roi_psd(window_data, roi_indices, sfreq):
     return roi_psds
 
 
-def extract_specparam_features(freqs, psd, freq_range=SPECPARAM_FREQ_RANGE):
+# Reported per region but not regressed on: they qualify the fit itself.
+APSD_FIT_DIAGNOSTICS = ('aperiodic_knee', 'aperiodic_r2')
+
+
+def extract_specparam_features(freqs, psd, freq_range=SPECPARAM_FREQ_RANGE,
+                               aperiodic_mode='fixed'):
     """
     Extract aperiodic and periodic features using specparam.
 
@@ -149,6 +154,11 @@ def extract_specparam_features(freqs, psd, freq_range=SPECPARAM_FREQ_RANGE):
             - periodic_bp_<band> for each band
             - alpha_peak_freq
             - alpha_peak_power
+            - aperiodic_knee (NaN unless aperiodic_mode is 'knee')
+            - aperiodic_r2
+
+    The 'knee' mode adds a bend to the aperiodic fit, which infant spectra need when the
+    slope is not constant across the whole range; 'fixed' assumes a single slope.
 
     Note: Compatible with specparam 2.0 API.
     """
@@ -160,7 +170,7 @@ def extract_specparam_features(freqs, psd, freq_range=SPECPARAM_FREQ_RANGE):
         max_n_peaks=SPECPARAM_MAX_N_PEAKS,
         min_peak_height=SPECPARAM_MIN_PEAK_HEIGHT,
         peak_threshold=SPECPARAM_PEAK_THRESHOLD,
-        aperiodic_mode='fixed'
+        aperiodic_mode=aperiodic_mode
     )
 
     try:
@@ -170,15 +180,26 @@ def extract_specparam_features(freqs, psd, freq_range=SPECPARAM_FREQ_RANGE):
         # Aperiodic parameters (specparam 2.0 API)
         aperiodic_params = sm.results.params.aperiodic.params
         features['aperiodic_offset'] = aperiodic_params[0]
-        features['aperiodic_exponent'] = aperiodic_params[1]
+        if aperiodic_mode == 'knee':
+            features['aperiodic_knee'] = aperiodic_params[1]
+            features['aperiodic_exponent'] = aperiodic_params[2]
+        else:
+            features['aperiodic_knee'] = np.nan
+            features['aperiodic_exponent'] = aperiodic_params[1]
+        features['aperiodic_r2'] = float(sm.results.metrics.results['gof_rsquared'])
 
         # Get model frequencies and data spectrum
         model_freqs = sm.data.freqs
         data_spectrum = sm.data.power_spectrum
 
         # Compute aperiodic fit to get flattened spectrum
-        offset, exponent = aperiodic_params[0], aperiodic_params[1]
-        aperiodic_fit = offset - np.log10(model_freqs ** exponent)
+        # Aperiodic model in log-power: 'fixed' is a single slope, 'knee' bends.
+        if aperiodic_mode == 'knee':
+            aperiodic_fit = features['aperiodic_offset'] - np.log10(
+                features['aperiodic_knee'] + model_freqs ** features['aperiodic_exponent'])
+        else:
+            aperiodic_fit = features['aperiodic_offset'] - np.log10(
+                model_freqs ** features['aperiodic_exponent'])
         flat_spec = data_spectrum - aperiodic_fit
 
         # Compute bandpower from the periodic (flattened) spectrum
@@ -214,6 +235,8 @@ def extract_specparam_features(freqs, psd, freq_range=SPECPARAM_FREQ_RANGE):
         # If fitting fails, return NaN for all features
         features['aperiodic_offset'] = np.nan
         features['aperiodic_exponent'] = np.nan
+        features['aperiodic_knee'] = np.nan
+        features['aperiodic_r2'] = np.nan
         for band_name in FREQ_BANDS.keys():
             features[f'periodic_bp_{band_name}'] = np.nan
         features['alpha_peak_freq'] = np.nan
@@ -352,7 +375,10 @@ def run_cv_evaluation(subject_features_df, meta_df, target_col, cv_strategy='kfo
     Run cross-validation evaluation matching run_downstream.py logic.
     """
     # Get feature columns (exclude 'subject')
-    feature_cols = [c for c in subject_features_df.columns if c.startswith('APSD_')]
+    # The knee and the goodness of fit describe the fit, not the spectrum, so they
+    # are reported alongside the features without being regressed on.
+    feature_cols = [c for c in subject_features_df.columns
+                    if c.startswith('APSD_') and not c.endswith(APSD_FIT_DIAGNOSTICS)]
 
     # Merge features with targets
     subject_targets = meta_df.groupby('subject')[target_col].first().reset_index()

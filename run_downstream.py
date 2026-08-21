@@ -151,6 +151,9 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "positives": "neighbor" if is_neighbor else "augment",
             "neighbor_metric": nbr_metric,
             "neighbor_index_dir": nbr_dir,
+            # The epoch count is neither in the filename nor derivable from it, so
+            # a shorter run would otherwise pass for a full one.
+            "num_epochs": 100,
         })
     elif method == "AE":
         model_filename = ae_checkpoint_name(zone, frequency, fold_id)
@@ -176,6 +179,8 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "prior": "standard",
             "free_bits": vae_free_bits,
             "lr": 1e-3,
+            # The code width changes the model but not its filename.
+            "latent_dim": 128,
         })
         if allow_legacy:
             # Legacy VAE checkpoints share this filename pattern but their beta is
