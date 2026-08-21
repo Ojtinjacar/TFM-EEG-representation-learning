@@ -45,7 +45,10 @@ PRESET_ZONES = {
 
 # Frequency bands (user-specified)
 FREQ_BANDS = {
-    "delta": (0.5, 3),
+    # The Welch estimate uses a one-second segment, so the lowest bin above DC
+    # sits at 1 Hz: a floor below that describes a resolution the spectrum does
+    # not have.
+    "delta": (1.0, 3),
     "theta": (3, 6),
     "alpha": (6, 9),
     "beta": (9, 20),
