@@ -44,7 +44,11 @@ from build_neighbor_index import (  # noqa: E402
     compute_feat_z,
     roi_indices_from_channels,
 )
-from montage import load_channel_names, resolve_processed_montage  # noqa: E402
+from montage import (  # noqa: E402
+    MONTAGE_SIDECAR,
+    load_channel_names,
+    resolve_processed_montage,
+)
 
 _STRATEGIES = {
     # strategy: (group_cols_base, exclude_column)  -- candidate must DIFFER in exclude_column
@@ -176,6 +180,11 @@ def main(args):
 
     meta[["subject", "age", "epoch_index", "block"]].to_csv(
         os.path.join(args.output_dir, "neighbor_index_meta.csv"), index=False)
+    # State the electrodes the index was scored on, as build_neighbor_index.py
+    # does: an index whose montage is unknown cannot be told apart from one
+    # built for another zone.
+    with open(os.path.join(args.output_dir, MONTAGE_SIDECAR), "w") as fh:
+        fh.write("\n".join(all_channels) + "\n")
     pd.DataFrame(diag_rows).to_csv(
         os.path.join(args.output_dir, f"neighbor_index_{args.strategy}_diagnostics.csv"), index=False)
     print("[ablation] done.")

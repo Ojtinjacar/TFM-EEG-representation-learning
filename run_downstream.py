@@ -21,40 +21,118 @@ from checkpoint_naming import (
     interfusion_checkpoint_name,
 )
 from train_vae import BETA_CONVENTION
+from montage import MONTAGE_SIDECAR, load_channel_names, resolve_processed_montage
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
 LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion"]
 FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion"]
 
-_NIDX_SESSION   = "data/processed/neighbor_index"
-_NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"
-_NIDX_DIFFAGE   = "data/processed/neighbor_index_diffage"
-# Same-session index built with exclude_lag=0, so the window immediately next to
-# the anchor is an eligible positive. Upper bound on how much of the gain the
+# Neighbour strategies and the directory each one lives in. A zone other than the
+# whole head reads the index built from that zone's channels: the positive of a
+# frontal encoder is the window a frontal montage calls nearest, not the one the
+# whole head does. `lag0` is the same-session index built with exclude_lag=0, so
+# the window next to the anchor is eligible: an upper bound on how much the
 # temporal-contiguity shortcut alone can buy.
-_NIDX_LAG0      = "data/processed/neighbor_index_lag0"
-
-
-def _nbr(metric, index_dir):
-    return ["--positives", "neighbor", "--neighbor_metric", metric, "--neighbor_index_dir", index_dir]
-
-
-SIMCLR_VARIANTS = {
-    "SimCLR":                 {"flags": [], "tag": ""},
-    "SimCLR-nbr-cosine":      {"flags": _nbr("cosine", _NIDX_SESSION),      "tag": "nbrcosine"},
-    "SimCLR-nbr-wasser":      {"flags": _nbr("wasserstein", _NIDX_SESSION), "tag": "nbrwasser"},
-    "SimCLR-nbr-riemann":     {"flags": _nbr("riemann", _NIDX_SESSION),     "tag": "nbrriemann"},
-    "SimCLR-xsubj-cosine":    {"flags": _nbr("cosine", _NIDX_CROSSSUBJ),      "tag": "xscosine"},
-    "SimCLR-xsubj-wasser":    {"flags": _nbr("wasserstein", _NIDX_CROSSSUBJ), "tag": "xswasser"},
-    "SimCLR-xsubj-riemann":   {"flags": _nbr("riemann", _NIDX_CROSSSUBJ),     "tag": "xsriemann"},
-    "SimCLR-diffage-cosine":  {"flags": _nbr("cosine", _NIDX_DIFFAGE),      "tag": "dacosine"},
-    "SimCLR-diffage-wasser":  {"flags": _nbr("wasserstein", _NIDX_DIFFAGE), "tag": "dawasser"},
-    "SimCLR-diffage-riemann": {"flags": _nbr("riemann", _NIDX_DIFFAGE),     "tag": "dariemann"},
-    "SimCLR-lag0-cosine":     {"flags": _nbr("cosine", _NIDX_LAG0),      "tag": "lag0cosine"},
-    "SimCLR-lag0-wasser":     {"flags": _nbr("wasserstein", _NIDX_LAG0), "tag": "lag0wasser"},
-    "SimCLR-lag0-riemann":    {"flags": _nbr("riemann", _NIDX_LAG0),     "tag": "lag0riemann"},
+_NIDX_BASE = {
+    "nbr":     "neighbor_index",
+    "xsubj":   "neighbor_index_crosssubj",
+    "diffage": "neighbor_index_diffage",
+    "lag0":    "neighbor_index_lag0",
 }
+
+WHOLE_HEAD_ZONE = "all"
+
+_METRIC_OF_SUFFIX = {"cosine": "cosine", "wasser": "wasserstein", "riemann": "riemann"}
+_TAG_OF_STRATEGY = {"nbr": "nbr", "xsubj": "xs", "diffage": "da", "lag0": "lag0"}
+
+SIMCLR_VARIANT_NAMES = ("SimCLR",) + tuple(
+    f"SimCLR-{strategy}-{suffix}"
+    for strategy in _NIDX_BASE
+    for suffix in _METRIC_OF_SUFFIX
+)
+
+
+def neighbor_index_dir(strategy, zone):
+    """Returns the index directory of a neighbour strategy for one zone.
+
+    Args:
+        strategy (str): Key of :data:`_NIDX_BASE`.
+        zone (str): Head zone of the run; the whole head keeps the plain name.
+
+    Returns:
+        str: Path of the index directory.
+    """
+    base = os.path.join("data", "processed", _NIDX_BASE[strategy])
+    return base if zone == WHOLE_HEAD_ZONE else f"{base}_{zone}"
+
+
+def build_simclr_variants(zone):
+    """Builds the SimCLR variant table for one zone.
+
+    The neighbour index is resolved per zone, so a variant name means "nearest
+    window according to this zone" in every run. The tag is not zone-dependent
+    because the checkpoint name already carries the zone.
+
+    Args:
+        zone (str): Head zone of the run.
+
+    Returns:
+        dict: Variant name to its pre-training flags and checkpoint tag.
+    """
+    variants = {"SimCLR": {"flags": [], "tag": ""}}
+    for strategy in _NIDX_BASE:
+        index_dir = neighbor_index_dir(strategy, zone)
+        for suffix, metric in _METRIC_OF_SUFFIX.items():
+            variants[f"SimCLR-{strategy}-{suffix}"] = {
+                "flags": ["--positives", "neighbor",
+                          "--neighbor_metric", metric,
+                          "--neighbor_index_dir", index_dir],
+                "tag": f"{_TAG_OF_STRATEGY[strategy]}{suffix}",
+            }
+    return variants
+
+
+def check_neighbor_indices(variants, selected, zone, data_path):
+    """Fails before training if a neighbour index is missing or foreign.
+
+    The index records the montage it was built from, so pairing windows by the
+    wrong electrodes is caught here instead of after hours of pre-training.
+
+    Args:
+        variants (dict): Output of :func:`build_simclr_variants`.
+        selected (list): Variant names about to run.
+        zone (str): Head zone of the run.
+        data_path (str): Windows array the run evaluates.
+
+    Raises:
+        SystemExit: If an index is absent, predates the montage fix, or
+            describes another montage.
+    """
+    needed = {spec["flags"][spec["flags"].index("--neighbor_index_dir") + 1]
+              for name in selected
+              for spec in [variants[name]]
+              if "--neighbor_index_dir" in spec["flags"]}
+    if not needed:
+        return
+
+    n_channels = np.load(data_path, mmap_mode="r").shape[1]
+    expected = resolve_processed_montage(data_path, n_channels)
+    for index_dir in sorted(needed):
+        if not os.path.isdir(index_dir):
+            raise SystemExit(
+                f"[ERROR] Zone {zone!r} needs the neighbour index {index_dir}, which does "
+                "not exist. Build it with src/build_neighbor_index.py on that zone.")
+        sidecar = os.path.join(index_dir, MONTAGE_SIDECAR)
+        if not os.path.exists(sidecar):
+            raise SystemExit(
+                f"[ERROR] {index_dir} records no montage, so it predates the montage fix "
+                "and may pair windows by the wrong electrodes. Rebuild it.")
+        if load_channel_names(sidecar) != expected:
+            raise SystemExit(
+                f"[ERROR] {index_dir} was built from another montage than {data_path}. "
+                f"Rebuild the index for zone {zone!r}.")
+        print(f"[INFO] Neighbour index for zone {zone!r}: {index_dir}", flush=True)
 
 def parse_output(output):
     """
@@ -401,8 +479,9 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     print(f"\n[PHASE 1] Pre-training models for fold {fold_idx+1}...", flush=True)
 
     # 1.1 Pre-train each requested SimCLR variant (once, independent of target)
+    variant_specs = build_simclr_variants(args.zone)
     for variant in simclr_variants:
-        spec = SIMCLR_VARIANTS[variant]
+        spec = variant_specs[variant]
         print(f"\n  Pre-training {variant} (self-supervised)...", flush=True)
         pretrained_models[variant] = run_pretraining(
             method="SimCLR",
@@ -534,7 +613,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
                 # Determine which pre-trained model to use
                 downstream_method = method
-                if method in SIMCLR_VARIANTS:
+                if method in SIMCLR_VARIANT_NAMES:
                     model_path = pretrained_models.get(method)
                     downstream_method = "SimCLR"
                 elif method == "AE":
@@ -619,6 +698,14 @@ def parse_fold_ranges(fold_ranges_arg):
 
 
 def main(args):
+    # A missing or foreign neighbour index is worth an immediate stop: the run
+    # would otherwise pre-train for hours before pairing windows by electrodes
+    # that are not the ones being evaluated.
+    check_neighbor_indices(
+        build_simclr_variants(args.zone), args.simclr_variants, args.zone,
+        config_data_paths(args.zone, args.frequency)[0],
+    )
+
     # Load metadata to get subject IDs for cross-validation
     meta_path = args.meta_path if args.meta_path else config_data_paths(args.zone, args.frequency)[1]
     meta_df = pd.read_csv(meta_path)
@@ -981,7 +1068,7 @@ if __name__ == "__main__":
         nargs="+",
         type=str,
         default=["SimCLR"],
-        choices=list(SIMCLR_VARIANTS.keys()),
+        choices=list(SIMCLR_VARIANT_NAMES),
         help="Which SimCLR variants to run as first-class methods (default: just the "
              "standard 'SimCLR' control). E.g. --simclr_variants SimCLR SimCLR-nbr-cosine."
     )
