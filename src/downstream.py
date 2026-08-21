@@ -1,5 +1,6 @@
 import os
 import argparse
+import json
 import numpy as np
 import pandas as pd
 
@@ -13,6 +14,8 @@ from sklearn.decomposition import PCA
 
 from models import (EnhancedAttentionLSTM, AttentionLSTMAutoencoder,
                     MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder)
+from interfusion import InterFusionEEG
+from checkpoint_naming import sidecar_path
 from utils import set_seed
 
 # ============================
@@ -346,40 +349,59 @@ def main(args):
         seed=args.seed
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
 
         embedding_size = args.embedding_size
-        
-        # 1) Load pre-trained backbone
-        model_params = {
-            "input_size": X.shape[2], 
-            "hidden_size": embedding_size, 
-            "n_channels": X.shape[1],
-            "sfreq": args.sampling_frequency, 
-            "lstm_hidden_size": embedding_size // 2,
-        }
 
-        model_map = {
-            "SimCLR": EnhancedAttentionLSTM,
-            "AE": AttentionLSTMAutoencoder,
-            "MAE": MaskedAttentionLSTMAutoencoder,
-            "VAE": VariationalAttentionLSTMAutoencoder,
-            "TripletLoss": EnhancedAttentionLSTM
-        }
-        model_class = model_map.get(args.method)
-        
-        backbone = model_class(**model_params).to(device)
-        state_dict = torch.load(args.model_path, map_location=device)
-        if args.method == "VAE":
-            # The latent prior has no parameters to restore for inference; drop its
-            # keys and load the rest strictly, so a genuine mismatch still fails.
-            state_dict = {k: v for k, v in state_dict.items()
-                          if not k.startswith("prior.")}
-        backbone.load_state_dict(state_dict, strict=True)
-        print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
+        if args.method == "InterFusion":
+            # Architecture hyperparameters live in the checkpoint sidecar so
+            # train and eval can never drift apart.
+            with open(sidecar_path(args.model_path)) as fh:
+                sc = json.load(fh)
+            backbone = InterFusionEEG(
+                x_dim=X.shape[1], window=X.shape[2], z_dim=sc["z_dim"],
+                strides=tuple(sc.get("strides", (2, 1, 2, 1, 2, 2, 2))),
+                rnn_hidden=sc["rnn_hidden"],
+                dense_hidden=sc.get("dense_hidden", 500),
+                flow_levels=sc["flow_levels"],
+            ).to(device)
+            backbone.load_state_dict(
+                torch.load(args.model_path, map_location=device), strict=True
+            )
+            embedding_size = backbone.embedding_dim
+            print(f"Pre-trained backbone ('InterFusion') loaded from: "
+                  f"{args.model_path} (embedding_dim={embedding_size})")
+        else:
+            # 1) Load pre-trained backbone
+            model_params = {
+                "input_size": X.shape[2],
+                "hidden_size": embedding_size,
+                "n_channels": X.shape[1],
+                "sfreq": args.sampling_frequency,
+                "lstm_hidden_size": embedding_size // 2,
+            }
+
+            model_map = {
+                "SimCLR": EnhancedAttentionLSTM,
+                "AE": AttentionLSTMAutoencoder,
+                "MAE": MaskedAttentionLSTMAutoencoder,
+                "VAE": VariationalAttentionLSTMAutoencoder,
+                "TripletLoss": EnhancedAttentionLSTM
+            }
+            model_class = model_map.get(args.method)
+
+            backbone = model_class(**model_params).to(device)
+            state_dict = torch.load(args.model_path, map_location=device)
+            if args.method == "VAE":
+                # The latent prior has no parameters to restore for inference; drop
+                # its keys and load the rest strictly, so a genuine mismatch fails.
+                state_dict = {k: v for k, v in state_dict.items()
+                              if not k.startswith("prior.")}
+            backbone.load_state_dict(state_dict, strict=True)
+            print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
 
         # 2) Build full model and optionally freeze backbone
         head = Head(embedding_size, 1).to(device)
@@ -597,7 +619,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "InterFusion"],
         required=True,
         help="Method to use."
     )

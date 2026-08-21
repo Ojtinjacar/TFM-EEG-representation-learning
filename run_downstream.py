@@ -18,13 +18,14 @@ from checkpoint_naming import (
     simclr_checkpoint_name,
     triplet_checkpoint_name,
     vae_checkpoint_name,
+    interfusion_checkpoint_name,
 )
 from train_vae import BETA_CONVENTION
 
 # Configuration of experiments
 # Methods to run for each evaluation mode
-LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
-FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
+LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion"]
+FINE_TUNING_METHODS = ["supervised", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion"]
 
 _NIDX_SESSION   = "data/processed/neighbor_index"
 _NIDX_CROSSSUBJ = "data/processed/neighbor_index_crosssubj"
@@ -182,6 +183,21 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             print(f"  > [REUSE] {method}: legacy reuse disabled for the VAE "
                   f"(incompatible beta scale).")
             allow_legacy = False
+    elif method == "InterFusion":
+        model_filename = interfusion_checkpoint_name(zone, frequency, fold_id)
+        # The filename does not encode the architecture, so two variants would
+        # share it; pin the widths the sidecar records and downstream reads back.
+        expected.update({
+            "method": "InterFusion",
+            "fold_id": fold_id,
+            "z_dim": 4,
+            "rnn_hidden": 500,
+            "dense_hidden": 500,
+            "flow_levels": 20,
+            "epochs": 20,
+            "pretrain_epochs": 20,
+            "lr": 1e-3,
+        })
     else:
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
@@ -222,6 +238,14 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--block-size", "25",  # 100ms @ 250Hz
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
+    elif method == "InterFusion":
+        command = [
+            "python", "src/train_interfusion.py",
+            "--zone", zone,
+            "--frequency", frequency,
+            "--fold_id", fold_id,
+            "--exclude_subjects"
+        ] + [str(s) for s in test_subjects]
     elif method == "VAE":
         command = [
             "python", "src/train_vae.py",
@@ -240,7 +264,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
 
-    if method in ("AE", "MAE", "VAE"):
+    if method in ("AE", "MAE", "VAE", "InterFusion"):
         win_path, meta_path = config_data_paths(zone, frequency)
         command += ["--data-path", win_path, "--meta-path", meta_path]
     if method == "VAE":
@@ -432,7 +456,22 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["VAE"] = None
 
-    # 1.5 Pre-train TripletLoss for each target (depends on target)
+    # 1.5 Pre-train InterFusion (once, independent of target)
+    if _use("InterFusion"):
+        print(f"\n  Pre-training InterFusion (hierarchical HVAE)...", flush=True)
+        pretrained_models["InterFusion"] = run_pretraining(
+            method="InterFusion",
+            target=None,
+            zone=args.zone,
+            frequency=args.frequency,
+            test_subjects=test_subjects,
+            fold_id=fold_id,
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+        )
+    else:
+        pretrained_models["InterFusion"] = None
+
+    # 1.6 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
         if not _use("TripletLoss"):
             pretrained_models[f"TripletLoss_{target}"] = None
@@ -499,6 +538,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path = pretrained_models["MAE"]
                 elif method == "VAE":
                     model_path = pretrained_models["VAE"]
+                elif method == "InterFusion":
+                    model_path = pretrained_models["InterFusion"]
                 elif method == "TripletLoss":
                     model_path = pretrained_models[f"TripletLoss_{target}"]
                 else:  # PCA o supervised
