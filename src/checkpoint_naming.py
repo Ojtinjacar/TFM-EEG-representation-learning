@@ -107,6 +107,31 @@ def interfusion_checkpoint_name(zone, frequency, fold_id, z_dim=4,
             f"_m{z_dim}_w{w_prime}_e{epochs}.pth")
 
 
+def expclr_checkpoint_name(zone, frequency, fold_id, descriptor, batch_size,
+                           lr, temperature, delta):
+    """Returns the ExpCLR checkpoint filename.
+
+    The descriptor is part of the name because it is what the loss compares against:
+    two runs that differ only in it produce different encoders.
+
+    Args:
+        zone (str): Electrode zone.
+        frequency (str): Frequency band.
+        fold_id (str): Fold identifier.
+        descriptor (str): Name of the expert descriptor.
+        batch_size (int): Training batch size.
+        lr (float): Learning rate.
+        temperature (float): Temperature of the soft maximum.
+        delta (float): Target scale for maximally dissimilar pairs.
+
+    Returns:
+        str: Checkpoint filename.
+    """
+    return (f"ExpCLR_{zone}_{frequency}{_fold_suffix(fold_id)}_{descriptor}"
+            f"_batch_{batch_size}_lr_{lr}_tau_{temperature}"
+            f"_delta_{delta}.pth")
+
+
 def sidecar_path(checkpoint_path):
     """Returns the sidecar JSON path for a checkpoint path."""
     return str(checkpoint_path).replace(".pth", "_config.json")

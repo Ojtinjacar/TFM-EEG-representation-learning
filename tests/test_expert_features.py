@@ -44,9 +44,13 @@ def synthetic_recording(n_windows=3, n_channels=8, n_samples=1250, seed=0):
 
 def test_catalogue_sizes_and_uniqueness():
     assert len(DESCRIPTORS["P_full"]) == 78
+    assert len(DESCRIPTORS["P_madurativo"]) == 32
+    assert len(DESCRIPTORS["P_aper"]) == 8
     for name, cols in DESCRIPTORS.items():
         assert len(cols) == len(set(cols)), f"{name} repeats a column"
         assert set(cols) <= set(DESCRIPTORS["P_full"])
+    # The oscillatory block is not part of the maturational ablation.
+    assert not any(c.startswith("osc_") for c in DESCRIPTORS["P_madurativo"])
 
 
 def test_bands_tile_the_analysis_range():

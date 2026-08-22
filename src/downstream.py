@@ -55,22 +55,53 @@ class Head(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+# Which representation each pre-training objective actually shapes. A loss applied to a
+# projection head that is thrown away afterwards, as in SimCLR, leaves the embedding
+# underneath as the representation to evaluate; a loss applied to the encoder output
+# itself leaves that output. Evaluating the other one measures something the objective
+# never optimized.
+LOSS_REPRESENTATION = {"ExpCLR": "projection"}
+DEFAULT_REPRESENTATION = "embedding"
+
+
 class FullModel(nn.Module):
-    """
-    Backbone + head for the final task.
-    Uses backbone.get_embedding(x) as representation.
-    """
-    def __init__(self, backbone, head):
+    """Backbone and head for the downstream task."""
+
+    def __init__(self, backbone, head, representation=DEFAULT_REPRESENTATION):
+        """Initializes the model.
+
+        Args:
+            backbone (nn.Module): Pre-trained encoder.
+            head (nn.Module): Task head.
+            representation (str): ``embedding`` reads the encoder below its projection,
+                ``projection`` reads the encoder output.
+
+        Raises:
+            ValueError: If the representation is not one of the two.
+        """
         super().__init__()
+        if representation not in ("embedding", "projection"):
+            raise ValueError(
+                f"representation must be 'embedding' or 'projection', got {representation!r}"
+            )
         self.backbone = backbone
         self.head = head
+        self.representation = representation
 
     def forward(self, x):
+        """Maps a batch of windows to a prediction.
+
+        Args:
+            x (torch.Tensor): Windows, shape (batch, n_channels, n_samples).
+
+        Returns:
+            torch.Tensor: Head output.
+        """
         # The backbone is already frozen; no need for no_grad here
         # if the optimizer only acts on the head.
-        emb = self.backbone.get_embedding(x)
-        out = self.head(emb)
-        return out
+        emb = (self.backbone(x) if self.representation == "projection"
+               else self.backbone.get_embedding(x))
+        return self.head(emb)
 
 
 # ============================
@@ -349,7 +380,7 @@ def main(args):
         seed=args.seed
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR", "InterFusion"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
@@ -386,6 +417,7 @@ def main(args):
 
             model_map = {
                 "SimCLR": EnhancedAttentionLSTM,
+                "ExpCLR": EnhancedAttentionLSTM,
                 "AE": AttentionLSTMAutoencoder,
                 "MAE": MaskedAttentionLSTMAutoencoder,
                 "VAE": VariationalAttentionLSTMAutoencoder,
@@ -405,7 +437,9 @@ def main(args):
 
         # 2) Build full model and optionally freeze backbone
         head = Head(embedding_size, 1).to(device)
-        model = FullModel(backbone, head).to(device)
+        representation = LOSS_REPRESENTATION.get(args.method, DEFAULT_REPRESENTATION)
+        model = FullModel(backbone, head, representation=representation).to(device)
+        print(f"Evaluating the representation the objective shaped: {representation}.")
 
         if args.eval_mode == 'linear_probe': 
             for p in model.backbone.parameters():
@@ -619,7 +653,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "InterFusion"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "ExpCLR",
+                 "InterFusion"],
         required=True,
         help="Method to use."
     )

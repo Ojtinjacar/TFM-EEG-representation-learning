@@ -70,6 +70,135 @@ class NTXentLoss(torch.nn.Module):
         loss = self.criterion(logits, labels)
         return loss / (2 * self.batch_size)
 
+
+class ExpCLRLoss(torch.nn.Module):
+    """Contrastive loss driven by a continuous expert descriptor.
+
+    Augmentation-based contrastive losses need a rule that says which pairs are positive,
+    and they get it from transformations assumed to preserve the label. This one replaces
+    that rule with the descriptor itself: how close two windows should end up in the
+    representation is read off how close an expert would call them, on a continuous scale
+    rather than a positive/negative split. Binning the descriptor to recover discrete
+    labels would throw away exactly the relative distances that make the target useful.
+
+    The target for a pair is ``(1 - s_ij) * delta`` and the achieved value is the
+    normalized distance between representations, so the loss is the squared gap between
+    them, reduced over the batch by a soft maximum whose sharpness is set by the
+    temperature.
+    """
+
+    def __init__(self, delta=1.0, temperature=1.0, feat_max_dist=None,
+                 squared_similarity=True):
+        """Initializes the loss.
+
+        Args:
+            delta (float): Scale of the target distance for maximally dissimilar pairs.
+            temperature (float): Sharpness of the soft maximum over pairs; ``None``
+                averages the pairs instead, which removes the hard-negative mining.
+            feat_max_dist (float): Largest descriptor distance, used to normalize the
+                similarity. ``None`` takes the largest distance within each batch.
+            squared_similarity (bool): Square the similarity measure.
+
+        Raises:
+            ValueError: If ``feat_max_dist`` or ``temperature`` is not positive.
+        """
+        super(ExpCLRLoss, self).__init__()
+        if feat_max_dist is not None and feat_max_dist <= 0:
+            raise ValueError(f"feat_max_dist must be positive, got {feat_max_dist}")
+        if temperature is not None and temperature <= 0:
+            raise ValueError(f"temperature must be positive or None, got {temperature}")
+        self.delta = float(delta)
+        self.temperature = None if temperature is None else float(temperature)
+        self.feat_max_dist = None if feat_max_dist is None else float(feat_max_dist)
+        self.squared_similarity = bool(squared_similarity)
+        self.eps = 1e-8
+
+    def expert_similarity(self, f):
+        """Turns descriptor distances into similarities in [0, 1].
+
+        One means an identical descriptor and zero means the two furthest apart of the
+        reference set. Squaring the whole expression, rather than the ratio inside it,
+        keeps similarity high across the range of distances where most pairs sit and lets
+        it fall off only for genuinely distant ones.
+
+        Args:
+            f (torch.Tensor): Expert descriptors, shape (batch, n_features).
+
+        Returns:
+            torch.Tensor: Similarity matrix, shape (batch, batch).
+        """
+        feat_dist = torch.cdist(f, f, p=2)
+        if self.feat_max_dist is not None:
+            max_dist = self.feat_max_dist
+        else:
+            max_dist = feat_dist.max().clamp_min(self.eps)
+        sim = (1.0 - feat_dist / max_dist).clamp_min(0.0)
+        return sim.pow(2) if self.squared_similarity else sim
+
+    def normalized_distance(self, z):
+        """Divides each representation distance by the mean distance of its row.
+
+        This makes the loss invariant to rescaling the representation, so the encoder
+        cannot lower it by shrinking or inflating the space instead of arranging it. The
+        price is that every row of the result averages exactly one, which bounds how close
+        the target can be approached for a given delta.
+
+        Args:
+            z (torch.Tensor): Representations, shape (batch, n_dims).
+
+        Returns:
+            torch.Tensor: Normalized distance matrix, shape (batch, batch).
+        """
+        dist = torch.cdist(z, z, p=2)
+        mu = dist.mean(dim=1, keepdim=True).clamp_min(self.eps)
+        return dist / mu
+
+    def forward(self, z, f):
+        """Computes the loss of a batch.
+
+        Args:
+            z (torch.Tensor): Representations, shape (batch, n_dims).
+            f (torch.Tensor): Expert descriptors, shape (batch, n_features).
+
+        Returns:
+            torch.Tensor: Scalar loss.
+
+        Raises:
+            ValueError: If the two arguments disagree on the batch size, or the batch
+                holds fewer than two samples, which leaves no pair to compare.
+        """
+        if z.shape[0] != f.shape[0]:
+            raise ValueError(f"Batch mismatch between embeddings {z.shape} and features {f.shape}")
+        if z.shape[0] < 2:
+            raise ValueError("ExpCLR needs at least two samples per batch")
+
+        sim = self.expert_similarity(f.detach())
+        dist = self.normalized_distance(z)
+        return self.reduce(((1.0 - sim) * self.delta - dist).pow(2))
+
+    def reduce(self, pair_loss):
+        """Reduces the per-pair losses to a scalar.
+
+        A plain mean weights every pair alike. The soft maximum used instead concentrates
+        the gradient on the pairs that are furthest from their target, which is
+        hard-negative mining without having to select the pairs explicitly: a low
+        temperature approaches optimizing the single worst pair, a high one approaches the
+        mean.
+
+        Args:
+            pair_loss (torch.Tensor): Squared gaps, shape (batch, batch).
+
+        Returns:
+            torch.Tensor: Scalar loss.
+        """
+        if self.temperature is None:
+            return pair_loss.mean()
+
+        n_pairs = pair_loss.numel()
+        scaled = pair_loss.reshape(-1) / self.temperature
+        return self.temperature * (torch.logsumexp(scaled, dim=0) - np.log(n_pairs))
+
+
 def _floor_free_bits(kl_per_dim_batch, free_bits):
     """Floors the batch-averaged per-dimension KL, per Kingma et al. (2016)."""
     if free_bits and free_bits > 0.0:

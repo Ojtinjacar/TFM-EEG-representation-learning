@@ -74,6 +74,34 @@ TOPO = ["paf_central_minus_occipital", "paf_central_minus_parietal"]
 
 QUALITY_COLS = [f"apsd_r2_{roi}" for roi in ROIS]
 
+DESCRIPTOR_DIR = "data/processed/expert_features"
+
+
+def descriptor_path(descriptor: str, output_dir: str = DESCRIPTOR_DIR) -> str:
+    """Returns the path of a materialised descriptor matrix.
+
+    Args:
+        descriptor (str): Descriptor name.
+        output_dir (str): Directory the descriptors are written to.
+
+    Returns:
+        str: Path of the ``.npy`` holding the matrix.
+    """
+    return os.path.join(output_dir, f"{descriptor}.npy")
+
+
+def quality_path(descriptor: str, output_dir: str = DESCRIPTOR_DIR) -> str:
+    """Returns the path of the fit quality that accompanies a descriptor.
+
+    Args:
+        descriptor (str): Descriptor name.
+        output_dir (str): Directory the descriptors are written to.
+
+    Returns:
+        str: Path of the ``.npy`` holding one goodness-of-fit value per window.
+    """
+    return os.path.join(output_dir, f"{descriptor}_r2.npy")
+
 # A per-channel z-score leaves the channels at unit standard deviation; a recording in
 # volts sits five orders of magnitude below it.
 AMPLITUDE_UNIT_SCALE = (0.5, 2.0)
@@ -166,7 +194,10 @@ def check_amplitude_is_physical(recording: np.ndarray, n_probe: int = 60) -> flo
 
 
 def roi_measures(signal: np.ndarray, sfreq: float = SFREQ) -> dict[str, float]:
-    """Computes the nineteen base measures of one region of interest.
+    """Computes the measures of one region of interest.
+
+    The nineteen that belong to the descriptor, plus the goodness of the aperiodic fit,
+    which qualifies them rather than being one of them.
 
     Args:
         signal (np.ndarray): Channel-averaged signal of the region, shape (n_samples,).
@@ -311,7 +342,12 @@ def main(args: argparse.Namespace) -> None:
     matrix, complete = build_descriptor(features, meta, columns)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    np.save(os.path.join(args.output_dir, f"{args.descriptor}.npy"), matrix)
+    np.save(descriptor_path(args.descriptor, args.output_dir), matrix)
+    # One goodness-of-fit value per window, averaged over the regions: it qualifies the
+    # aperiodic fit the descriptor rests on, so training can drop windows whose spectrum
+    # the model never captured.
+    quality = features[QUALITY_COLS].to_numpy(dtype=np.float32).mean(axis=1)
+    np.save(quality_path(args.descriptor, args.output_dir), quality)
     features.to_parquet(os.path.join(args.output_dir, "window_features.parquet"), index=False)
     with open(os.path.join(args.output_dir, f"{args.descriptor}_columns.json"), "w") as fh:
         json.dump({
