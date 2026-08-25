@@ -14,7 +14,7 @@ from sklearn.decomposition import PCA
 
 from models import (EnhancedAttentionLSTM, AttentionLSTMAutoencoder,
                     MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder)
-from interfusion import InterFusionEEG
+from interfusion import EMBEDDING_STATS, InterFusionEEG
 from checkpoint_naming import sidecar_path
 from utils import set_seed
 
@@ -392,12 +392,16 @@ def main(args):
             # train and eval can never drift apart.
             with open(sidecar_path(args.model_path)) as fh:
                 sc = json.load(fh)
+            # The readout mode is not part of the checkpoint: it decides how the
+            # trained model is read, not how it was trained, so it comes from the
+            # caller and the same weights serve both modes.
             backbone = InterFusionEEG(
                 x_dim=X.shape[1], window=X.shape[2], z_dim=sc["z_dim"],
                 strides=tuple(sc.get("strides", (2, 1, 2, 1, 2, 2, 2))),
                 rnn_hidden=sc["rnn_hidden"],
                 dense_hidden=sc.get("dense_hidden", 500),
                 flow_levels=sc["flow_levels"],
+                embedding_stats=getattr(args, "embedding_stats", "mean"),
             ).to(device)
             backbone.load_state_dict(
                 torch.load(args.model_path, map_location=device), strict=True
@@ -682,6 +686,15 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Fold identifier to include in output filenames."
+    )
+    parser.add_argument(
+        "--embedding_stats",
+        type=str,
+        default="mean",
+        choices=sorted(EMBEDDING_STATS),
+        help="InterFusion readout: 'mean' concatenates the averaged z2 and z1 means "
+             "(channels + z_dim); 'mean_std' appends their standard deviations and doubles "
+             "the width. Ignored by every other method."
     )
 
     args = parser.parse_args()

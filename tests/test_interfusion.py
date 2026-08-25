@@ -176,6 +176,45 @@ def test_z1_sees_x_only_through_d(model):
     assert grad_cut is None
 
 
+def test_the_declared_embedding_width_matches_what_is_returned(model):
+    """The downstream head is sized from ``embedding_dim``, so a mismatch would crash it."""
+    x = torch.randn(B, M, W)
+    with torch.no_grad():
+        assert model.get_embedding(x).shape[1] == model.embedding_dim
+
+
+def test_the_wide_readout_doubles_the_width():
+    """``mean_std`` exists to widen a representation that is only M + z_dim wide."""
+    narrow = InterFusionEEG(x_dim=M, window=W, rnn_hidden=8, dense_hidden=8, flow_levels=2)
+    wide = InterFusionEEG(x_dim=M, window=W, rnn_hidden=8, dense_hidden=8, flow_levels=2,
+                          embedding_stats="mean_std")
+    x = torch.randn(B, M, W)
+    with torch.no_grad():
+        assert wide.embedding_dim == 2 * narrow.embedding_dim
+        assert wide.get_embedding(x).shape[1] == wide.embedding_dim
+
+
+def test_the_default_readout_is_unchanged():
+    """Every result already published used the narrow readout; it must stay the default."""
+    m = InterFusionEEG(x_dim=M, window=W, rnn_hidden=8, dense_hidden=8, flow_levels=2)
+    assert m.embedding_stats == "mean"
+    assert m.embedding_dim == M + m.z_dim
+
+
+def test_an_explicit_mode_overrides_the_configured_one():
+    """A caller asking for a mode must get it, whatever the instance was built with."""
+    m = InterFusionEEG(x_dim=M, window=W, rnn_hidden=8, dense_hidden=8, flow_levels=2,
+                       embedding_stats="mean_std")
+    x = torch.randn(B, M, W)
+    with torch.no_grad():
+        assert m.get_embedding(x, stats="mean").shape[1] == M + m.z_dim
+
+
+def test_an_unknown_readout_is_refused():
+    with pytest.raises(ValueError):
+        InterFusionEEG(x_dim=M, window=W, rnn_hidden=8, dense_hidden=8, embedding_stats="median")
+
+
 def test_pretrain_shares_conv_deconv_with_main(model):
     """Stage-1 training must move the main model's conv/deconv weights."""
     pre = PretrainVAE(model)

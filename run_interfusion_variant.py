@@ -201,7 +201,7 @@ def evaluate_fold(args, fold_idx, fold_id, test_subjects, model_path, seed, meth
     rows = []
     for eval_mode in args.eval_modes:
         print(f"  > Evaluating: {method_label} | {args.target} | {eval_mode}", flush=True)
-        nrmse, r2, rmse, subject_avgs, session_avgs = rd.run_downstream_experiment(
+        nrmse, r2, rmse, subject_avgs = rd.run_downstream_experiment(
             method=method_label,
             eval_mode=eval_mode,
             target=args.target,
@@ -212,6 +212,7 @@ def evaluate_fold(args, fold_idx, fold_id, test_subjects, model_path, seed, meth
             test_subjects=test_subjects,
             fold_id=fold_id,
             downstream_method="InterFusion",
+            embedding_stats=args.embedding_stats,
         )
         if not subject_avgs:
             print(f"    [ERROR] No metrics for {eval_mode}; fold row dropped.", flush=True)
@@ -226,9 +227,9 @@ def evaluate_fold(args, fold_idx, fold_id, test_subjects, model_path, seed, meth
             "R2": np.nan if r2 is None else r2,
             "RMSE": np.nan if rmse is None else rmse,
             # Same serialization as run_downstream.py: the aggregation scripts
-            # parse these columns positionally, not as Python literals.
+            # parse this column positionally, not as a Python literal. There is
+            # no session_avgs column here because parse_output does not emit one.
             "subject_avgs": ";".join(f"{yt},{yp}" for yt, yp in subject_avgs),
-            "session_avgs": ";".join(f"{s},{yt},{yp}" for s, yt, yp in session_avgs),
         })
         print(f"    OK nRMSE={rows[-1]['nRMSE']:.4f}, R2={rows[-1]['R2']:.4f}, "
               f"RMSE={rows[-1]['RMSE']:.2f}", flush=True)
@@ -314,6 +315,12 @@ def parse_args():
     parser.add_argument("--zone", type=str, default="all", help="Head zone data.")
     parser.add_argument("--frequency", type=str, default="all", help="Frequency band.")
     parser.add_argument("--target", type=str, default="age", help="Regression target.")
+    parser.add_argument("--embedding-stats", dest="embedding_stats", type=str,
+                        default="mean", choices=["mean", "mean_std"],
+                        help="Downstream readout. 'mean' gives channels + z_dim "
+                             "dimensions; 'mean_std' doubles it by appending the "
+                             "standard deviations. Does not affect pre-training, so the "
+                             "same checkpoints serve both: point --model_dir at them.")
     parser.add_argument("--eval_modes", nargs="+", default=["linear_probe", "fine_tuning"],
                         help="Downstream evaluation modes.")
     parser.add_argument("--n_folds", type=int, default=10, help="Number of folds.")

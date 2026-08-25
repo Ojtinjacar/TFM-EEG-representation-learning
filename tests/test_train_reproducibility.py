@@ -10,7 +10,7 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from train_expclr import set_seed
+from utils import set_seed
 
 
 def test_set_seed_makes_torch_numpy_and_random_deterministic():

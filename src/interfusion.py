@@ -46,6 +46,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Readout modes of ``get_embedding`` and how many blocks of (x_dim + z_dim) each one
+# concatenates. The mode is a decision about how the trained model is read, not about
+# how it is trained, so it never affects the weights and existing checkpoints stay valid.
+EMBEDDING_STATS = {"mean": 1, "mean_std": 2}
+
 LOGSTD_MIN = -5.0
 LOGSTD_MAX = 2.0
 _HALF_LOG_2PI = 0.9189385332046727  # 0.5 * log(2 * pi)
@@ -292,11 +297,18 @@ class InterFusionEEG(nn.Module):
     """
 
     def __init__(self, x_dim, window, z_dim=4, strides=(2, 1, 2, 1, 2, 2, 2),
-                 rnn_hidden=500, dense_hidden=500, flow_levels=20):
+                 rnn_hidden=500, dense_hidden=500, flow_levels=20,
+                 embedding_stats="mean"):
         super().__init__()
+        if embedding_stats not in EMBEDDING_STATS:
+            raise ValueError(
+                f"embedding_stats must be one of {sorted(EMBEDDING_STATS)}, "
+                f"got {embedding_stats!r}"
+            )
         self.x_dim = x_dim
         self.window = window
         self.z_dim = z_dim
+        self.embedding_stats = embedding_stats
 
         self.encoder = ConvStack(x_dim, strides)
         lengths = self.encoder.output_lengths(window)
@@ -327,7 +339,8 @@ class InterFusionEEG(nn.Module):
         self.px_mean = nn.Linear(dense_hidden, x_dim)
         self.px_logstd = nn.Linear(dense_hidden, x_dim)
 
-        self.embedding_dim = x_dim + z_dim
+        # The downstream head is sized from this, so it has to follow the readout mode.
+        self.embedding_dim = EMBEDDING_STATS[embedding_stats] * (x_dim + z_dim)
 
     # ------------------------------------------------------------------
     # building blocks
@@ -436,10 +449,10 @@ class InterFusionEEG(nn.Module):
     # ------------------------------------------------------------------
     # downstream interface
     # ------------------------------------------------------------------
-    def get_embedding(self, x, stats="mean"):
+    def get_embedding(self, x, stats=None):
         """Deterministic embedding for downstream heads.
 
-        With ``stats="mean"`` (default, the protocol's representation):
+        With ``stats="mean"`` (the protocol's original representation):
         concatenates the W'-averaged z2 posterior mean (M dims) with the
         time-averaged deterministic z1 mean sequence (M' dims) -> (B, M + M').
         With ``stats="mean_std"`` the temporal/W' standard deviations are
@@ -447,9 +460,15 @@ class InterFusionEEG(nn.Module):
         infant EEG, where the temporal mean alone is degenerate. No sampling
         and no flow: stable representation, gradients flow for fine-tuning.
 
+        Note that M is the channel count, so this representation is far
+        narrower than the 128 dimensions every other method of the protocol
+        uses, and it narrows further the fewer channels the region has.
+
         Args:
             x (torch.Tensor): Input windows (B, M, W).
-            stats (str): "mean" or "mean_std".
+            stats (str): "mean" or "mean_std". Defaults to the instance's
+                ``embedding_stats``, so callers that do not care keep the
+                mode the model was configured with.
 
         Returns:
             torch.Tensor: Embedding of shape (B, M + M') or (B, 2*(M + M')).
@@ -457,7 +476,8 @@ class InterFusionEEG(nn.Module):
         Raises:
             ValueError: If ``stats`` is not a supported mode.
         """
-        if stats not in ("mean", "mean_std"):
+        stats = self.embedding_stats if stats is None else stats
+        if stats not in EMBEDDING_STATS:
             raise ValueError(f"Unknown stats mode: {stats!r} (use 'mean' or 'mean_std').")
         qz2_mean, _ = self.encode_z2(x)
         d = self.decoder(qz2_mean)

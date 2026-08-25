@@ -14,7 +14,6 @@ evenly instead of ordering them.
 
 import argparse
 import os
-import random
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +26,7 @@ from checkpoint_naming import expclr_checkpoint_name, write_sidecar
 from build_expert_features import DESCRIPTORS, quality_path
 from loss import ExpCLRLoss
 from models import EnhancedAttentionLSTM
+from utils import set_seed
 
 
 class ExpertFeatureDataset(Dataset):
@@ -107,12 +107,6 @@ def diagnose_epoch(model, batches, criterion, device, loss_on):
         "effective_dim": effective_dimensionality(np.concatenate(reps, axis=0)),
         "equidistant_loss": float(np.mean(references)),
     }
-
-
-def set_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
 
 
 def max_pairwise_distance(F, *, max_samples=4096, seed=42):

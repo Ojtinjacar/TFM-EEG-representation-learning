@@ -46,14 +46,18 @@ EXPCLR_SIM_MAX = "train"
 EXPCLR_EPOCHS = 100
 EXPCLR_LR_GAMMA = 0.99
 EXPCLR_EMBEDDING_SIZE = 128
-# Folds differ in which subject is held out, not in how the encoder starts, so the seed is
-# held fixed across them and the fold-to-fold spread measures only the split.
-EXPCLR_SEED = 42
 EXPCLR_FEATURES = descriptor_path(EXPCLR_DESCRIPTOR)
 
+# The three descriptors nest: P_aper is contained in P_madurativo, and that one in P_full.
+# Running the three isolates what the contrast needs. If the aperiodic pair alone matches
+# the default, the periodic measures carry nothing; if the widest one does not improve, its
+# extra measures are noise. P_full is the sparse one, so a share of its geometry is imputed.
 EXPCLR_VARIANTS = {
-    "ExpCLR": {"descriptor": EXPCLR_DESCRIPTOR, "features": EXPCLR_FEATURES},
+    "ExpCLR":      {"descriptor": EXPCLR_DESCRIPTOR, "features": EXPCLR_FEATURES},
+    "ExpCLR-full": {"descriptor": "P_full", "features": descriptor_path("P_full")},
+    "ExpCLR-aper": {"descriptor": "P_aper", "features": descriptor_path("P_aper")},
 }
+EXPCLR_VARIANT_NAMES = tuple(EXPCLR_VARIANTS)
 
 
 def load_expclr_tuning(config_dir):
@@ -271,16 +275,12 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         # These methods do not require pre-training
         return None
 
-    # What varies across ExpCLR folds is the held-out subject, not the initialisation, so
-    # the seed stays fixed and the spread between folds measures only the split.
-    eff_seed = EXPCLR_SEED if method in EXPCLR_VARIANTS else seed
-
     exclude_sorted = sorted(str(s) for s in test_subjects)
     expected = {
         "zone": zone,
         "frequency": frequency,
         "exclude_subjects": exclude_sorted,
-        "seed": eff_seed,
+        "seed": seed,
     }
 
     # Determine the model filename based on the method
@@ -470,10 +470,16 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     if method in ("AE", "MAE", "VAE", "InterFusion"):
         win_path, meta_path = config_data_paths(zone, frequency)
         command += ["--data-path", win_path, "--meta-path", meta_path]
+    if method == "TripletLoss":
+        # This one takes the directory under a different flag name, which is why it used
+        # to be left out of the line above and silently trained on the default 5_s set
+        # whatever zone was asked for.
+        win_path, _ = config_data_paths(zone, frequency)
+        command += ["--data_path", os.path.dirname(win_path)]
     if method == "VAE":
         command += ["--beta", str(vae_beta), "--free-bits", str(vae_free_bits)]
 
-    command += ["--seed", str(eff_seed)]
+    command += ["--seed", str(seed)]
 
     print(f"  > Running pretraining command: {' '.join(command)}")
     try:
@@ -502,9 +508,13 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"STDERR: {e.stderr}")
         return None
 
-def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None):
+def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None, embedding_stats=None):
     """
     Constructs and runs a single call to downstream.py.
+
+    ``embedding_stats`` only reaches InterFusion, whose readout width depends on it;
+    left as None the evaluated model keeps its default mode.
+
     Returns: (nrmse, r2, rmse, subject_avgs)
     """
     win_path, meta_path = config_data_paths(zone, frequency)
@@ -529,6 +539,9 @@ def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_
 
     if fold_id:
         command.extend(["--fold_id", fold_id])
+
+    if embedding_stats:
+        command.extend(["--embedding_stats", embedding_stats])
 
     print(f"  > Running downstream: {method} | {target} | {eval_mode}")
 
@@ -573,11 +586,14 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
         return selected is None or m in selected
 
     simclr_variants = list(getattr(args, "simclr_variants", None) or ["SimCLR"]) if _use("SimCLR") else []
+    expclr_variants = list(getattr(args, "expclr_variants", None) or ["ExpCLR"]) if _use("ExpCLR") else []
     def _expand(mlist):
         out = []
         for m in mlist:
             if m == "SimCLR":
                 out.extend(simclr_variants)
+            elif m == "ExpCLR":
+                out.extend(expclr_variants)
             else:
                 out.append(m)
         return out
@@ -675,22 +691,21 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     else:
         pretrained_models["InterFusion"] = None
 
-    # 1.55 Pre-train ExpCLR (once, independent of target)
+    # 1.55 Pre-train each requested ExpCLR variant (once, independent of target)
     for variant in EXPCLR_VARIANTS:
-        if _use(variant):
-            print(f"\n  Pre-training {variant} on the {EXPCLR_VARIANTS[variant]['descriptor']} "
-                  f"descriptor...", flush=True)
-            pretrained_models[variant] = run_pretraining(
-                method=variant,
-                target=None,
-                zone=args.zone,
-                frequency=args.frequency,
-                test_subjects=test_subjects,
-                fold_id=fold_id,
-                no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
-            )
-        else:
-            pretrained_models[variant] = None
+        pretrained_models[variant] = None
+    for variant in expclr_variants:
+        print(f"\n  Pre-training {variant} on the {EXPCLR_VARIANTS[variant]['descriptor']} "
+              f"descriptor...", flush=True)
+        pretrained_models[variant] = run_pretraining(
+            method=variant,
+            target=None,
+            zone=args.zone,
+            frequency=args.frequency,
+            test_subjects=test_subjects,
+            fold_id=fold_id,
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+        )
 
     # 1.6 Pre-train TripletLoss for each target (depends on target)
     for target_idx, target in enumerate(targets):
@@ -1217,6 +1232,16 @@ if __name__ == "__main__":
         choices=list(SIMCLR_VARIANT_NAMES),
         help="Which SimCLR variants to run as first-class methods (default: just the "
              "standard 'SimCLR' control). E.g. --simclr_variants SimCLR SimCLR-nbr-cosine."
+    )
+    parser.add_argument(
+        "--expclr_variants",
+        nargs="+",
+        type=str,
+        default=["ExpCLR"],
+        choices=list(EXPCLR_VARIANT_NAMES),
+        help="Which ExpCLR variants to run, one per expert descriptor (default: just "
+             "'ExpCLR', the P_madurativo one). Takes effect only when ExpCLR is among the "
+             "methods. E.g. --methods ExpCLR --expclr_variants ExpCLR-full ExpCLR-aper."
     )
     args = parser.parse_args()
     if args.expclr_config:

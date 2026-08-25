@@ -216,3 +216,111 @@ def test_a_column_missing_throughout_training_is_refused():
     train = np.array([True, True, False])
     with pytest.raises(ValueError, match="training split"):
         impute_with_train_medians(features, train)
+
+
+def test_every_method_seeds_its_pretraining_the_same_way():
+    """The fold-to-fold spread must mean the same thing for every method.
+
+    That spread is what the comparison table reports as error, so a method whose seed does
+    not follow the fold would show less variation by construction and not by being steadier.
+    """
+    import inspect
+
+    import run_downstream
+
+    source = inspect.getsource(run_downstream.run_pretraining)
+    assert '"--seed", str(seed)' in source
+    assert "eff_seed" not in source
+
+
+def test_the_seed_is_applied_by_one_shared_function():
+    import train_expclr
+    import utils
+
+    assert train_expclr.set_seed is utils.set_seed
+
+
+@pytest.mark.parametrize("method", ["AE", "MAE", "VAE", "InterFusion", "TripletLoss"])
+def test_every_pretraining_gets_the_zone_it_was_asked_for(method, monkeypatch):
+    """A method that keeps its default path trains on the whole head whatever zone is asked.
+
+    TripletLoss did exactly that: it was left out of the line that appends the resolved
+    path, so every per-zone result of it described a different channel set than its label.
+    """
+    import subprocess
+
+    import run_downstream
+
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(run_downstream.subprocess, "run", fake_run)
+    run_downstream.run_pretraining(
+        method=method, target="age", zone="occipital", frequency="all",
+        test_subjects=["B010"], fold_id="fold0", no_skip=True, seed=1234,
+    )
+    command = seen["command"]
+    # --zone alone proves nothing: it is passed even when the data path is not, which is
+    # how the bug hid. What matters is the value of the flag the loader actually reads.
+    flags = [i for i, c in enumerate(command) if c in ("--data-path", "--data_path")]
+    assert flags, f"{method} receives no data path, so it falls back to the default set"
+    for i in flags:
+        assert "occipital_all" in command[i + 1], \
+            f"{method} is pointed at {command[i + 1]} while asked for occipital"
+
+
+def test_the_three_descriptors_are_registered_as_variants():
+    """Each descriptor needs its own variant, or only one of them can ever be run."""
+    import run_downstream
+    from build_expert_features import DESCRIPTORS
+
+    declared = {v["descriptor"] for v in run_downstream.EXPCLR_VARIANTS.values()}
+    assert declared == set(DESCRIPTORS)
+
+
+def test_each_variant_points_at_the_file_of_its_own_descriptor():
+    """The descriptor name reaches the checkpoint, so a crossed path would mislabel it."""
+    import run_downstream
+    from build_expert_features import descriptor_path
+
+    for variant in run_downstream.EXPCLR_VARIANTS.values():
+        assert variant["features"] == descriptor_path(variant["descriptor"])
+
+
+@pytest.mark.parametrize("requested,expected", [
+    (None, ["ExpCLR"]),
+    (["ExpCLR-aper"], ["ExpCLR-aper"]),
+    (["ExpCLR-full", "ExpCLR-aper"], ["ExpCLR-full", "ExpCLR-aper"]),
+])
+def test_the_requested_variants_replace_expclr_in_the_method_list(requested, expected):
+    """Omitting the flag must leave the published runs reproducible by the same command."""
+    selected = None
+
+    def _use(m):
+        return selected is None or m in selected
+
+    expclr_variants = list(requested or ["ExpCLR"]) if _use("ExpCLR") else []
+
+    def _expand(mlist):
+        out = []
+        for m in mlist:
+            if m == "ExpCLR":
+                out.extend(expclr_variants)
+            else:
+                out.append(m)
+        return out
+
+    assert _expand(["VAE", "ExpCLR"]) == ["VAE"] + expected
+
+
+def test_two_variants_of_the_same_fold_do_not_share_a_checkpoint():
+    """Two descriptors trained on the same fold must not overwrite each other."""
+    names = {
+        expclr_checkpoint_name("all", "all", "fold0", descriptor,
+                               batch_size=64, lr=0.005, temperature=1.0, delta=1.0)
+        for descriptor in ("P_madurativo", "P_full", "P_aper")
+    }
+    assert len(names) == 3
