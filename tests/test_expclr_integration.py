@@ -131,27 +131,34 @@ def _write_config(directory, **overrides):
         json.dump(config, fh)
 
 
-def test_a_tuned_configuration_replaces_the_paper_defaults():
+@pytest.fixture
+def pristine_variants():
+    """Restores the whole catalogue, since tuning writes into every entry."""
+    import copy
+
     import run_downstream
 
-    try:
-        assert run_downstream.expclr_hparams("ExpCLR") == (
-            run_downstream.EXPCLR_DELTA, run_downstream.EXPCLR_LR,
-            run_downstream.EXPCLR_TAU, run_downstream.EXPCLR_SIM_MAX,
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_config(tmp)
-            run_downstream.load_expclr_tuning(tmp)
-            assert run_downstream.expclr_hparams("ExpCLR") == (1.88, 0.001, 0.7, "batch")
-    finally:
-        run_downstream.EXPCLR_VARIANTS["ExpCLR"] = {
-            "descriptor": run_downstream.EXPCLR_DESCRIPTOR,
-            "features": run_downstream.EXPCLR_FEATURES,
-        }
+    saved = copy.deepcopy(run_downstream.EXPCLR_VARIANTS)
+    yield run_downstream
+    run_downstream.EXPCLR_VARIANTS.clear()
+    run_downstream.EXPCLR_VARIANTS.update(saved)
 
 
-def test_a_configuration_that_never_beat_the_random_encoder_is_refused():
-    import run_downstream
+def test_a_tuned_configuration_replaces_the_paper_defaults(pristine_variants):
+    run_downstream = pristine_variants
+
+    assert run_downstream.expclr_hparams("ExpCLR") == (
+        run_downstream.EXPCLR_DELTA, run_downstream.EXPCLR_LR,
+        run_downstream.EXPCLR_TAU, run_downstream.EXPCLR_SIM_MAX,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_config(tmp)
+        run_downstream.load_expclr_tuning(tmp)
+        assert run_downstream.expclr_hparams("ExpCLR") == (1.88, 0.001, 0.7, "batch")
+
+
+def test_a_configuration_that_never_beat_the_random_encoder_is_refused(pristine_variants):
+    run_downstream = pristine_variants
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_config(tmp, beats_random_baseline=False)
@@ -159,8 +166,8 @@ def test_a_configuration_that_never_beat_the_random_encoder_is_refused():
             run_downstream.load_expclr_tuning(tmp)
 
 
-def test_a_missing_configuration_falls_back_instead_of_failing():
-    import run_downstream
+def test_a_missing_configuration_falls_back_instead_of_failing(pristine_variants):
+    run_downstream = pristine_variants
 
     with tempfile.TemporaryDirectory() as tmp:
         run_downstream.load_expclr_tuning(tmp)
@@ -281,13 +288,19 @@ def test_the_three_descriptors_are_registered_as_variants():
     assert declared == set(DESCRIPTORS)
 
 
-def test_each_variant_points_at_the_file_of_its_own_descriptor():
-    """The descriptor name reaches the checkpoint, so a crossed path would mislabel it."""
+def test_each_variant_reads_the_file_of_its_own_descriptor_and_zone():
+    """The descriptor and the zone both reach the checkpoint, so a crossed path mislabels it."""
     import run_downstream
-    from build_expert_features import descriptor_path
+    from build_expert_features import ROIS, descriptor_path, zone_dir
 
-    for variant in run_downstream.EXPCLR_VARIANTS.values():
-        assert variant["features"] == descriptor_path(variant["descriptor"])
+    seen = set()
+    for zone in ["all"] + ROIS:
+        for variant in run_downstream.EXPCLR_VARIANTS.values():
+            path = run_downstream.expclr_features(variant["descriptor"], zone)
+            assert path == descriptor_path(variant["descriptor"], zone_dir(zone))
+            seen.add(path)
+    # One file per (descriptor, zone): no zone may read another one's descriptor.
+    assert len(seen) == len(run_downstream.EXPCLR_VARIANTS) * (len(ROIS) + 1)
 
 
 @pytest.mark.parametrize("requested,expected", [
@@ -324,3 +337,82 @@ def test_two_variants_of_the_same_fold_do_not_share_a_checkpoint():
         for descriptor in ("P_madurativo", "P_full", "P_aper")
     }
     assert len(names) == 3
+
+
+def _variant():
+    return {"ExpCLR-probe": {"descriptor": "P_aper"}}
+
+
+def test_a_zone_reads_the_descriptor_built_for_that_zone(tmp_path, monkeypatch):
+    """Each zone has its own file, so one region cannot be described by another."""
+    import run_downstream
+    from build_expert_features import zone_dir
+
+    monkeypatch.setattr(run_downstream, "DESCRIPTOR_DIR_FOR_TESTS", None, raising=False)
+    assert zone_dir("all", "base") == "base"
+    assert zone_dir("occipital", "base").endswith(os.path.join("base", "occipital"))
+    assert run_downstream.expclr_features("P_aper", "occipital") != \
+        run_downstream.expclr_features("P_aper", "all")
+
+
+def test_a_missing_descriptor_stops_the_run_before_it_trains():
+    """Otherwise the trainer dies, the orchestrator swallows it and the fold loses rows."""
+    import run_downstream
+
+    monkey = {"ExpCLR-ghost": {"descriptor": "P_aper"}}
+    with pytest.raises(SystemExit, match="does not exist"):
+        run_downstream.check_expclr_descriptors(
+            monkey, ["ExpCLR-ghost"], {"ExpCLR-ghost"}, "central")
+
+
+def test_the_preflight_stays_out_of_the_way_when_expclr_is_not_running():
+    import run_downstream
+
+    run_downstream.check_expclr_descriptors(
+        _variant(), ["ExpCLR-probe"], {"AE", "MAE"}, "occipital")
+
+
+def test_a_single_region_drops_the_other_three_and_the_contrasts():
+    """A contrast is a difference between regions, so one region has none."""
+    from build_expert_features import ROIS, descriptors_for, rois_of_zone
+
+    whole = descriptors_for(rois_of_zone("all"))
+    one = descriptors_for(rois_of_zone("parietal"))
+
+    assert len(whole["P_full"]) == 78 and len(one["P_full"]) == 19
+    assert len(whole["P_madurativo"]) == 32 and len(one["P_madurativo"]) == 8
+    assert not any(c.startswith("paf_central_minus") for c in one["P_full"])
+    assert all(c.endswith("_parietal") for c in one["P_full"])
+    for name, columns in one.items():
+        assert set(columns) <= set(whole[name]), f"{name} invents columns"
+
+
+def test_a_descriptor_spans_exactly_the_regions_of_its_zone():
+    from build_expert_features import ROIS, descriptors_for, rois_of_zone
+
+    for zone in ["all"] + ROIS:
+        rois = rois_of_zone(zone)
+        for name, columns in descriptors_for(rois).items():
+            covered = {c.rsplit("_", 1)[1] for c in columns if c.rsplit("_", 1)[1] in ROIS}
+            assert covered == set(rois), f"{name} on {zone} spans {covered}"
+
+
+def test_an_unknown_zone_is_refused():
+    from build_expert_features import rois_of_zone
+
+    with pytest.raises(ValueError, match="is not a zone"):
+        rois_of_zone("temporal")
+
+
+def test_windows_must_cover_the_regions_the_descriptor_describes():
+    from apsd_baseline import PRESET_ZONES
+    from build_expert_features import ROIS, rois_of_zone
+    from train_expclr import check_roi_coverage
+
+    # A one-region descriptor is happy with one-region windows.
+    check_roi_coverage(PRESET_ZONES["occipital"], "P_aper", rois_of_zone("occipital"))
+    # The whole-montage one is not.
+    with pytest.raises(ValueError, match="no channel of"):
+        check_roi_coverage(PRESET_ZONES["occipital"], "P_aper", rois_of_zone("all"))
+    whole = [ch for roi in ROIS for ch in PRESET_ZONES[roi]]
+    check_roi_coverage(whole, "P_madurativo", rois_of_zone("all"))

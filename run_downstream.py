@@ -22,7 +22,7 @@ from checkpoint_naming import (
     vae_checkpoint_name,
     interfusion_checkpoint_name,
 )
-from build_expert_features import DESCRIPTORS, descriptor_path
+from build_expert_features import descriptor_path, descriptors_for, rois_of_zone, zone_dir
 from train_vae import BETA_CONVENTION
 from montage import MONTAGE_SIDECAR, load_channel_names, resolve_processed_montage
 
@@ -46,16 +46,28 @@ EXPCLR_SIM_MAX = "train"
 EXPCLR_EPOCHS = 100
 EXPCLR_LR_GAMMA = 0.99
 EXPCLR_EMBEDDING_SIZE = 128
-EXPCLR_FEATURES = descriptor_path(EXPCLR_DESCRIPTOR)
+
+
+def expclr_features(descriptor, zone):
+    """Returns the descriptor file a zone reads.
+
+    Args:
+        descriptor (str): Descriptor name.
+        zone (str): Head zone of the run.
+
+    Returns:
+        str: Path of the descriptor built for that zone.
+    """
+    return descriptor_path(descriptor, zone_dir(zone))
 
 # The three descriptors nest: P_aper is contained in P_madurativo, and that one in P_full.
 # Running the three isolates what the contrast needs. If the aperiodic pair alone matches
 # the default, the periodic measures carry nothing; if the widest one does not improve, its
 # extra measures are noise. P_full is the sparse one, so a share of its geometry is imputed.
 EXPCLR_VARIANTS = {
-    "ExpCLR":      {"descriptor": EXPCLR_DESCRIPTOR, "features": EXPCLR_FEATURES},
-    "ExpCLR-full": {"descriptor": "P_full", "features": descriptor_path("P_full")},
-    "ExpCLR-aper": {"descriptor": "P_aper", "features": descriptor_path("P_aper")},
+    "ExpCLR":      {"descriptor": EXPCLR_DESCRIPTOR},
+    "ExpCLR-full": {"descriptor": "P_full"},
+    "ExpCLR-aper": {"descriptor": "P_aper"},
 }
 EXPCLR_VARIANT_NAMES = tuple(EXPCLR_VARIANTS)
 
@@ -166,6 +178,44 @@ def build_simclr_variants(zone):
                 "tag": f"{_TAG_OF_STRATEGY[strategy]}{suffix}",
             }
     return variants
+
+
+def check_expclr_descriptors(variants, selected, methods, zone):
+    """Fails before training if ExpCLR has no descriptor to contrast against.
+
+    A descriptor describes the regions its zone covers, so a run reads the one built for
+    its own zone: the whole montage for ``all``, a single region otherwise. A file that is
+    not there would otherwise surface as a fold that reports no pre-trained model and
+    quietly contributes nothing to the table.
+
+    Args:
+        variants (dict): Descriptor of every ExpCLR variant.
+        selected (list): Variant names requested for this run.
+        methods (set): Methods the run is restricted to, or ``None`` for all of them.
+        zone (str): Head zone of the run.
+
+    Raises:
+        SystemExit: If the descriptor of a running variant is not on disk.
+    """
+    if methods is not None and not (set(selected) | {"ExpCLR"}) & methods:
+        return
+    running = [name for name in selected if name in variants]
+    if not running:
+        return
+
+    rois = rois_of_zone(zone)
+    for name in running:
+        descriptor = variants[name]["descriptor"]
+        path = expclr_features(descriptor, zone)
+        width = len(descriptors_for(rois)[descriptor])
+        if not os.path.exists(path):
+            raise SystemExit(
+                f"[ERROR] {name} on zone {zone!r} needs {path}, which does not exist. Build "
+                f"it with src/build_expert_features.py --zone {zone} --descriptor "
+                f"{descriptor}."
+            )
+        print(f"[INFO] Descriptor for {name} on zone {zone!r}: {path} "
+              f"({width} columns over {len(rois)} region(s))", flush=True)
 
 
 def check_neighbor_indices(variants, selected, zone, data_path):
@@ -377,7 +427,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "lr_gamma": EXPCLR_LR_GAMMA,
             # Neither width reaches the filename, and both change what the weights mean.
             "embedding_size": EXPCLR_EMBEDDING_SIZE,
-            "descriptor_dim": len(DESCRIPTORS[variant["descriptor"]]),
+            "descriptor_dim": len(descriptors_for(rois_of_zone(zone))[variant["descriptor"]]),
             # The loss shapes the encoder output, which is what downstream evaluates.
             "loss_on": "projection",
         })
@@ -456,7 +506,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--frequency", frequency,
             "--fold_id", fold_id,
             "--data_path", os.path.dirname(win_path),
-            "--expert_features", variant["features"],
+            "--expert_features", expclr_features(variant["descriptor"], zone),
             "--descriptor", variant["descriptor"],
             "--batch_size", str(EXPCLR_BATCH_SIZE),
             "--num_epochs", str(EXPCLR_EPOCHS),
@@ -858,6 +908,13 @@ def main(args):
     check_neighbor_indices(
         build_simclr_variants(args.zone), args.simclr_variants, args.zone,
         config_data_paths(args.zone, args.frequency)[0],
+    )
+    # Same reasoning for the descriptor ExpCLR contrasts against: a file that is not there,
+    # or one that describes the whole head while the windows do not, is worth an immediate
+    # stop rather than a fold that quietly loses its rows.
+    check_expclr_descriptors(
+        EXPCLR_VARIANTS, args.expclr_variants,
+        set(args.methods) if args.methods else None, args.zone,
     )
 
     # Load metadata to get subject IDs for cross-validation

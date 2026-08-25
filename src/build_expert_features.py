@@ -77,6 +77,22 @@ QUALITY_COLS = [f"apsd_r2_{roi}" for roi in ROIS]
 DESCRIPTOR_DIR = "data/processed/expert_features"
 
 
+def zone_dir(zone: str, base: str = DESCRIPTOR_DIR) -> str:
+    """Returns the directory holding the descriptors of a zone.
+
+    The descriptors of the whole montage stay at the top so their paths do not move; a
+    single region hangs below, which keeps one region from overwriting another.
+
+    Args:
+        zone (str): ``all`` or one region of the montage.
+        base (str): Directory the descriptors are written to.
+
+    Returns:
+        str: Directory for that zone.
+    """
+    return base if zone == "all" else os.path.join(base, zone)
+
+
 def descriptor_path(descriptor: str, output_dir: str = DESCRIPTOR_DIR) -> str:
     """Returns the path of a materialised descriptor matrix.
 
@@ -111,28 +127,74 @@ class DescriptorAlignmentError(MontageError):
     """Raised when the descriptor cannot be matched to the window metadata."""
 
 
-def _expand(bases: list[str], *, topo: bool) -> list[str]:
-    """Expands base measure names over the four regions of interest.
+def _expand(bases: list[str], *, topo: bool, rois: list[str] = None) -> list[str]:
+    """Expands base measure names over a set of regions of interest.
 
     Args:
         bases (list): Measure names without the region suffix.
         topo (bool): Whether to append the two topographic contrasts.
+        rois (list): Regions to expand over; the four of the montage by default.
 
     Returns:
         list: Ordered concrete column names.
     """
-    cols = [f"{base}_{roi}" for base in bases for roi in ROIS]
-    return cols + TOPO if topo else cols
+    rois = ROIS if rois is None else rois
+    cols = [f"{base}_{roi}" for base in bases for roi in rois]
+    # The contrasts subtract one region from another, so a single region has none.
+    return cols + TOPO if topo and len(rois) > 1 else cols
 
 
-DESCRIPTORS: dict[str, list[str]] = {
-    "P_full": _expand(BASE_A + BASE_B, topo=True),
-    "P_madurativo": _expand(BASE_MADURATIVO, topo=False),
-    "P_aper": _expand(BASE_APER, topo=False),
-}
+def descriptors_for(rois: list[str]) -> dict[str, list[str]]:
+    """Returns the catalogue restricted to a set of regions.
+
+    Each descriptor keeps the same measures and loses only the regions that are absent,
+    so a run over one region compares windows against what that region alone says. The
+    topographic contrasts disappear with a single region because they are differences
+    between two of them.
+
+    Args:
+        rois (list): Regions the descriptor spans.
+
+    Returns:
+        dict: Descriptor name to its ordered column names.
+
+    Raises:
+        ValueError: If a region is not one of the four of the montage.
+    """
+    unknown = [roi for roi in rois if roi not in ROIS]
+    if unknown:
+        raise ValueError(f"{unknown} are not regions of the montage; expected {ROIS}")
+    return {
+        "P_full": _expand(BASE_A + BASE_B, topo=True, rois=rois),
+        "P_madurativo": _expand(BASE_MADURATIVO, topo=False, rois=rois),
+        "P_aper": _expand(BASE_APER, topo=False, rois=rois),
+    }
 
 
-def roi_indices(channels: list[str], n_channels: int) -> dict[str, list[int]]:
+DESCRIPTORS: dict[str, list[str]] = descriptors_for(ROIS)
+
+
+def rois_of_zone(zone: str) -> list[str]:
+    """Returns the regions a zone covers.
+
+    Args:
+        zone (str): ``all`` for the whole montage, or one region of it.
+
+    Returns:
+        list: Regions the zone spans.
+
+    Raises:
+        ValueError: If the zone is neither ``all`` nor a region of the montage.
+    """
+    if zone == "all":
+        return list(ROIS)
+    if zone in ROIS:
+        return [zone]
+    raise ValueError(f"{zone!r} is not a zone; expected 'all' or one of {ROIS}")
+
+
+def roi_indices(channels: list[str], n_channels: int,
+                rois: list[str] = None) -> dict[str, list[int]]:
     """Maps each region of interest to its channels of the recording.
 
     Args:
@@ -151,8 +213,9 @@ def roi_indices(channels: list[str], n_channels: int) -> dict[str, list[int]]:
             f"{len(channels)} channel names for an array of {n_channels} channels: the "
             "regions are resolved by position, so both must describe the same montage."
         )
+    rois = ROIS if rois is None else rois
     indices = {roi: [i for i, ch in enumerate(channels) if ch in set(PRESET_ZONES[roi])]
-               for roi in ROIS}
+               for roi in rois}
     empty = [roi for roi, idx in indices.items() if not idx]
     if empty:
         raise DescriptorAlignmentError(
@@ -260,7 +323,7 @@ def compute_window_features(
     Raises:
         KeyError: If a region of interest has no channels assigned.
     """
-    empty = [roi for roi in ROIS if not roi_indices.get(roi)]
+    empty = [roi for roi, idx in roi_indices.items() if not idx]
     if empty:
         raise KeyError(f"Regions of interest without channels: {empty}")
 
@@ -270,11 +333,14 @@ def compute_window_features(
             print(f"  {i}/{X.shape[0]}...", flush=True)
         window = np.asarray(X[i], dtype=np.float64)
         feats: dict[str, float] = {}
-        for roi in ROIS:
+        for roi in roi_indices:
             for key, value in roi_measures(window[roi_indices[roi]].mean(axis=0), sfreq).items():
                 feats[f"{key}_{roi}"] = value
-        feats["paf_central_minus_occipital"] = feats["paf_freq_central"] - feats["paf_freq_occipital"]
-        feats["paf_central_minus_parietal"] = feats["paf_freq_central"] - feats["paf_freq_parietal"]
+        if len(roi_indices) > 1:
+            feats["paf_central_minus_occipital"] = (feats["paf_freq_central"]
+                                                    - feats["paf_freq_occipital"])
+            feats["paf_central_minus_parietal"] = (feats["paf_freq_central"]
+                                                   - feats["paf_freq_parietal"])
         rows.append(feats)
     return pd.DataFrame(rows)
 
@@ -333,25 +399,32 @@ def main(args: argparse.Namespace) -> None:
     spread = check_amplitude_is_physical(X)
     print(f"[INFO] median channel standard deviation: {spread:.3e}")
 
+    rois = rois_of_zone(args.zone)
+    catalogue = descriptors_for(rois)
     channels = load_channel_names(args.channels_txt)
-    indices = roi_indices(channels, X.shape[1])
-    print(f"[INFO] channels per region: { {r: len(i) for r, i in indices.items()} }")
+    indices = roi_indices(channels, X.shape[1], rois)
+    print(f"[INFO] zone {args.zone!r}, channels per region: "
+          f"{ {r: len(i) for r, i in indices.items()} }")
 
     features = compute_window_features(X, indices, sfreq=args.sfreq)
-    columns = DESCRIPTORS[args.descriptor]
+    columns = catalogue[args.descriptor]
     matrix, complete = build_descriptor(features, meta, columns)
 
+    args.output_dir = zone_dir(args.zone, args.output_dir)
     os.makedirs(args.output_dir, exist_ok=True)
     np.save(descriptor_path(args.descriptor, args.output_dir), matrix)
     # One goodness-of-fit value per window, averaged over the regions: it qualifies the
     # aperiodic fit the descriptor rests on, so training can drop windows whose spectrum
     # the model never captured.
-    quality = features[QUALITY_COLS].to_numpy(dtype=np.float32).mean(axis=1)
+    quality = features[[f"apsd_r2_{roi}" for roi in rois]].to_numpy(
+        dtype=np.float32).mean(axis=1)
     np.save(quality_path(args.descriptor, args.output_dir), quality)
     features.to_parquet(os.path.join(args.output_dir, "window_features.parquet"), index=False)
     with open(os.path.join(args.output_dir, f"{args.descriptor}_columns.json"), "w") as fh:
         json.dump({
             "descriptor": args.descriptor,
+            "zone": args.zone,
+            "rois": rois,
             "columns": columns,
             "n_windows": int(matrix.shape[0]),
             "n_complete": int(complete.sum()),
@@ -365,7 +438,7 @@ def main(args: argparse.Namespace) -> None:
     print(f"[INFO] {args.descriptor}: {matrix.shape[0]} x {matrix.shape[1]}, "
           f"{int(complete.sum())} complete rows "
           f"({100 * complete.mean():.1f}%)")
-    for name, cols in sorted(DESCRIPTORS.items()):
+    for name, cols in sorted(catalogue.items()):
         dense = features[cols].notna().all(axis=1).mean()
         print(f"[INFO] {name}: {len(cols)} columns, {100 * dense:.1f}% complete rows")
 
@@ -385,6 +458,11 @@ if __name__ == "__main__":
                         help="Channel names, used to map channels to regions of interest.")
     parser.add_argument("--output_dir", type=str, default="data/processed/expert_features",
                         help="Directory for the descriptor matrix and its column manifest.")
+    parser.add_argument("--zone", type=str, default="all",
+                        choices=["all"] + ROIS,
+                        help="Regions the descriptor spans. A single region drops the "
+                             "other three and the two topographic contrasts, and its "
+                             "descriptors are written to a subdirectory of that name.")
     parser.add_argument("--descriptor", type=str, default="P_full",
                         choices=sorted(DESCRIPTORS),
                         help="Which descriptor to materialise.")

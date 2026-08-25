@@ -10,6 +10,8 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from apsd_baseline import PRESET_ZONES
+from build_expert_features import ROIS
 from utils import set_seed
 
 
@@ -50,7 +52,11 @@ def tiny_dataset(tmp_path_factory):
     rng = np.random.default_rng(0)
     root = tmp_path_factory.mktemp("data")
     n = 96
-    np.save(root / "processed_windows.npy", rng.normal(size=(n, 4, 250)).astype(np.float32))
+    # One channel per region, so the windows cover everything the descriptor describes.
+    channels = [PRESET_ZONES[roi][0] for roi in ROIS]
+    np.save(root / "processed_windows.npy",
+            rng.normal(size=(n, len(channels), 250)).astype(np.float32))
+    (root / "channel_names.txt").write_text("\n".join(channels) + "\n")
     pd.DataFrame({
         "subject": np.repeat([f"S{i:02d}" for i in range(8)], n // 8),
         "age": np.tile([6, 9, 16, 36], n // 4),
@@ -66,7 +72,7 @@ def _train(tiny_dataset, seed, save_dir, fold_id, diagnose_every=5):
     root, features = tiny_dataset
     cmd = [sys.executable, os.path.join(ROOT, "src", "train_expclr.py"),
            "--data_path", str(root), "--expert_features", str(features),
-           "--descriptor", "P_aper", "--zone", "z", "--frequency", "f",
+           "--descriptor", "P_aper", "--zone", "all", "--frequency", "f",
            "--fold_id", fold_id, "--num_epochs", "2", "--batch_size", "32",
            "--embedding_size", "16", "--seed", str(seed),
            "--diagnose_every", str(diagnose_every),

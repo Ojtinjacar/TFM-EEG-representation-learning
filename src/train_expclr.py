@@ -23,7 +23,9 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader, Dataset
 
 from checkpoint_naming import expclr_checkpoint_name, write_sidecar
-from build_expert_features import DESCRIPTORS, quality_path
+from apsd_baseline import PRESET_ZONES
+from build_expert_features import descriptors_for, quality_path, rois_of_zone
+from montage import resolve_processed_montage
 from loss import ExpCLRLoss
 from models import EnhancedAttentionLSTM
 from utils import set_seed
@@ -109,6 +111,32 @@ def diagnose_epoch(model, batches, criterion, device, loss_on):
     }
 
 
+def check_roi_coverage(channels, descriptor, rois):
+    """Checks the windows cover every region the descriptor describes.
+
+    The descriptor holds measures of the four regions of interest, so windows carrying
+    only some of them would be pulled towards a geometry defined by electrodes the encoder
+    never sees. The montage is read from the recording rather than from the zone label,
+    which reaches the checkpoint name without ever touching the data.
+
+    Args:
+        channels (list): Channel names of the windows, in recording order.
+        descriptor (str): Name of the descriptor the loss compares against.
+        rois (list): Regions the descriptor spans.
+
+    Raises:
+        ValueError: If a region of the descriptor has no channel among the windows.
+    """
+    present = set(channels)
+    uncovered = [roi for roi in rois if not present & set(PRESET_ZONES[roi])]
+    if uncovered:
+        raise ValueError(
+            f"The windows carry no channel of {uncovered}, but {descriptor} describes "
+            f"{rois}. Train on windows that cover those regions, or on the descriptor "
+            "built for the zone these windows come from."
+        )
+
+
 def max_pairwise_distance(F, *, max_samples=4096, seed=42):
     if len(F) > max_samples:
         rng = np.random.default_rng(seed)
@@ -139,7 +167,8 @@ def main(args):
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.plot_dir, exist_ok=True)
 
-    X_np = np.load(os.path.join(args.data_path, "processed_windows.npy"))
+    windows_path = os.path.join(args.data_path, "processed_windows.npy")
+    X_np = np.load(windows_path)
     meta_df = pd.read_csv(os.path.join(args.data_path, "processed_metadata.csv"))
     features = np.load(args.expert_features)
     quality = None
@@ -158,13 +187,16 @@ def main(args):
             f"Expert features ({len(features)}) do not align with the window set ({len(X_np)}). "
             "Rebuild them with code/src/build_expert_features.py against this metadata."
         )
-    expected_columns = len(DESCRIPTORS[args.descriptor])
+    rois = rois_of_zone(args.zone)
+    check_roi_coverage(resolve_processed_montage(windows_path, X_np.shape[1]),
+                       args.descriptor, rois)
+    expected_columns = len(descriptors_for(rois)[args.descriptor])
     if features.shape[1] != expected_columns:
         raise ValueError(
             f"{args.expert_features} has {features.shape[1]} columns but {args.descriptor} "
-            f"is defined as {expected_columns}. The descriptor name reaches the checkpoint "
-            "filename, so a mismatch would label the encoder as trained on something it "
-            "never saw."
+            f"over {rois} has {expected_columns}. The descriptor name and the zone both "
+            "reach the checkpoint filename, so a mismatch would label the encoder as "
+            "trained on something it never saw."
         )
     print(f"Windows: {X_np.shape}, expert descriptor: {features.shape}")
 
@@ -317,7 +349,8 @@ if __name__ == "__main__":
                         help="Directory holding processed_windows.npy and processed_metadata.csv.")
     parser.add_argument("--expert_features", required=True,
                         help="Aligned expert-feature .npy from build_expert_features.py.")
-    parser.add_argument("--descriptor", default="P_madurativo", choices=sorted(DESCRIPTORS),
+    parser.add_argument("--descriptor", default="P_madurativo",
+                        choices=["P_full", "P_madurativo", "P_aper"],
                         help="Descriptor label, recorded in the checkpoint name.")
     parser.add_argument("--zone", default="all", help="Brain zone (naming only).")
     parser.add_argument("--frequency", default="all", help="Frequency band (naming only).")
