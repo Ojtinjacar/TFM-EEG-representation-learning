@@ -856,6 +856,11 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     result_entry = {
                         "fold": fold_idx,
                         "method": method,
+                        # Without these the zone lives only in whatever directory the
+                        # launch chose, so two zones written to one directory mix without
+                        # a trace and every reader has to guess from the path.
+                        "zone": args.zone,
+                        "frequency": args.frequency,
                         "eval_mode": eval_mode,
                         "target": target,
                         "nRMSE": nrmse,

@@ -279,6 +279,23 @@ def test_every_pretraining_gets_the_zone_it_was_asked_for(method, monkeypatch):
             f"{method} is pointed at {command[i + 1]} while asked for occipital"
 
 
+def test_a_result_row_says_which_zone_it_came_from():
+    """Without it the zone lives only in the output directory the launch happened to pick.
+
+    That is how eleven runs ended up describing a zone they were not trained on, and how a
+    reader has to infer from a path what the row should have carried.
+    """
+    import inspect
+
+    import run_downstream
+
+    source = inspect.getsource(run_downstream.execute_fold)
+    entry = source[source.index("result_entry = {"):]
+    entry = entry[: entry.index("}")]
+    for field in ('"zone": args.zone', '"frequency": args.frequency'):
+        assert field in entry, f"the result row does not carry {field}"
+
+
 def test_the_three_descriptors_are_registered_as_variants():
     """Each descriptor needs its own variant, or only one of them can ever be run."""
     import run_downstream

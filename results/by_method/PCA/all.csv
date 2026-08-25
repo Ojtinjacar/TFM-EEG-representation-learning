@@ -1,0 +1,11 @@
+family,variant,strategy,metric,descriptor,zone,frequency,target,eval_mode,fold,nrmse,r2,rmse,canonical,campaign,machine,source_dir,source_file
+PCA,PCA,,,,all,all,age,linear_probe,0,1.5723,-2.5013,11.9,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds0-0.csv
+PCA,PCA,,,,all,all,age,linear_probe,1,1.6195,-1.8873,13.16,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds1-1.csv
+PCA,PCA,,,,all,all,age,linear_probe,2,5.3036,-0.5257,13.5,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds2-2.csv
+PCA,PCA,,,,all,all,age,linear_probe,3,1.2947,-0.7823,11.7,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds3-3.csv
+PCA,PCA,,,,all,all,age,linear_probe,4,3.2496,-18.9275,11.47,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds4-4.csv
+PCA,PCA,,,,all,all,age,linear_probe,5,1.0919,-0.1926,13.65,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds5-5.csv
+PCA,PCA,,,,all,all,age,linear_probe,6,1.5852,-1.7517,11.69,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds6-6.csv
+PCA,PCA,,,,all,all,age,linear_probe,7,1.0782,-0.1665,12.4,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds7-7.csv
+PCA,PCA,,,,all,all,age,linear_probe,8,1.0895,-0.1885,14.2,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds8-8.csv
+PCA,PCA,,,,all,all,age,linear_probe,9,1.4188,-1.41,12.34,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds9-9.csv

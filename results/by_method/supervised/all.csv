@@ -1,0 +1,11 @@
+family,variant,strategy,metric,descriptor,zone,frequency,target,eval_mode,fold,nrmse,r2,rmse,canonical,campaign,machine,source_dir,source_file
+supervised,supervised,,,,all,all,age,fine_tuning,0,0.7494,-0.0955,4.76,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds0-0.csv
+supervised,supervised,,,,all,all,age,fine_tuning,1,0.7561,0.2598,5.33,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds1-1.csv
+supervised,supervised,,,,all,all,age,fine_tuning,2,0.8785,0.2547,5.2,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds2-2.csv
+supervised,supervised,,,,all,all,age,fine_tuning,3,0.5705,0.593,4.81,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds3-3.csv
+supervised,supervised,,,,all,all,age,fine_tuning,4,1.5106,-2.7665,5.55,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds4-4.csv
+supervised,supervised,,,,all,all,age,fine_tuning,5,0.3226,0.8733,3.81,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds5-5.csv
+supervised,supervised,,,,all,all,age,fine_tuning,6,0.7306,0.3723,5.14,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds6-6.csv
+supervised,supervised,,,,all,all,age,fine_tuning,7,0.6294,0.5888,7.33,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds7-7.csv
+supervised,supervised,,,,all,all,age,fine_tuning,8,0.3992,0.8068,5.12,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds8-8.csv
+supervised,supervised,,,,all,all,age,fine_tuning,9,0.7764,0.2948,7.03,True,baseline_ucles,A,save/baseline_ucles,downstream_raw_results_kfold_folds9-9.csv
