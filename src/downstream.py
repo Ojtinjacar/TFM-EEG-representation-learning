@@ -60,6 +60,16 @@ class Head(nn.Module):
 # underneath as the representation to evaluate; a loss applied to the encoder output
 # itself leaves that output. Evaluating the other one measures something the objective
 # never optimized.
+# The encoder each method leaves behind, for whoever needs to rebuild one from its weights.
+BACKBONE_BY_METHOD = {
+    "SimCLR": EnhancedAttentionLSTM,
+    "ExpCLR": EnhancedAttentionLSTM,
+    "TripletLoss": EnhancedAttentionLSTM,
+    "AE": AttentionLSTMAutoencoder,
+    "MAE": MaskedAttentionLSTMAutoencoder,
+    "VAE": VariationalAttentionLSTMAutoencoder,
+}
+
 LOSS_REPRESENTATION = {"ExpCLR": "projection"}
 DEFAULT_REPRESENTATION = "embedding"
 
@@ -419,15 +429,7 @@ def main(args):
                 "lstm_hidden_size": embedding_size // 2,
             }
 
-            model_map = {
-                "SimCLR": EnhancedAttentionLSTM,
-                "ExpCLR": EnhancedAttentionLSTM,
-                "AE": AttentionLSTMAutoencoder,
-                "MAE": MaskedAttentionLSTMAutoencoder,
-                "VAE": VariationalAttentionLSTMAutoencoder,
-                "TripletLoss": EnhancedAttentionLSTM
-            }
-            model_class = model_map.get(args.method)
+            model_class = BACKBONE_BY_METHOD.get(args.method)
 
             backbone = model_class(**model_params).to(device)
             state_dict = torch.load(args.model_path, map_location=device)
