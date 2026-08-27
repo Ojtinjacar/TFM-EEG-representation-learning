@@ -1,14 +1,18 @@
-"""K-fold driver for InterFusion architecture variants (C1a/C1b/C1c).
+"""K-fold driver for InterFusion.
 
 ``run_downstream.py`` pre-trains InterFusion with the paper defaults only, and
-``interfusion_checkpoint_name`` does not encode the recurrent/dense widths, so an
-architecture ablation launched through it would silently collide with the
-baseline checkpoints. This driver runs the very same protocol (identical fold
-split, identical per-fold seeds, identical evaluation entry point) while keeping
-each variant in its own model and results directory.
+``interfusion_checkpoint_name`` does not encode the recurrent/dense widths, so a
+run at other widths launched through it would silently collide with the baseline
+checkpoints. This driver runs the very same protocol (identical fold split,
+identical per-fold seeds, identical evaluation entry point) while keeping its
+models and results inside its own run directory.
+
+The widths default to 128 rather than the 500 of the original article: the
+cohort here is three orders of magnitude smaller than the server telemetry the
+model was proposed for, and the wider model has no data to fill it.
 
 Example:
-    python run_interfusion_variant.py --tag c1a --rnn-hidden 128 --dense-hidden 128
+    python run_interfusion.py --run_name interfusion --zone all
 """
 
 import argparse
@@ -190,10 +194,9 @@ def evaluate_fold(args, fold_idx, fold_id, test_subjects, model_path, seed, meth
         fold_idx (int): Fold index.
         fold_id (str): Fold identifier.
         test_subjects (list[str]): Held-out subjects.
-        model_path (str): Variant checkpoint to evaluate.
+        model_path (str): Checkpoint to evaluate.
         seed (int): Per-fold seed.
-        method_label (str): Method name recorded in the results (e.g.
-            "InterFusion-c1a"), distinct from the "InterFusion" code path.
+        method_label (str): Method name recorded in the results.
 
     Returns:
         list[dict]: One result row per evaluation mode that produced metrics.
@@ -257,7 +260,9 @@ def main(args):
     # what let one zone's results sit in a folder named after another.
     dirs = rd.run_dirs(args.run_name)
     model_dir, save_dir = dirs["models"], dirs["results"]
-    method_label = f"InterFusion-{args.tag}"
+    # One configuration, so the label is the method itself. The run directory is
+    # what separates two launches, which is what --run_name is for.
+    method_label = "InterFusion"
 
     start, end = args.fold_range if args.fold_range else (0, args.n_folds)
     for fold_idx, _, test_subjects in folds[start:end]:
@@ -291,14 +296,14 @@ def parse_args():
         argparse.Namespace: Parsed arguments.
     """
     parser = argparse.ArgumentParser(
-        description="K-fold driver for InterFusion architecture variants."
+        description="K-fold driver for InterFusion."
     )
-    parser.add_argument("--tag", type=str, required=True,
-                        help="Variant tag; names the method, model dir and save dir.")
-    parser.add_argument("--rnn-hidden", type=int, default=500,
-                        help="Backward-GRU hidden units (paper: 500).")
-    parser.add_argument("--dense-hidden", type=int, default=500,
-                        help="Feature/fusion dense units (paper: 500).")
+    parser.add_argument("--rnn-hidden", type=int, default=128,
+                        help="Backward-GRU hidden units. The article uses 500; 128 is what "
+                             "this cohort supports.")
+    parser.add_argument("--dense-hidden", type=int, default=128,
+                        help="Feature/fusion dense units. The article uses 500; 128 is what "
+                             "this cohort supports.")
     parser.add_argument("--flow-levels", type=int, default=20,
                         help="RealNVP levels on q(z1) (paper: 20).")
     # No --free-bits: src/train_interfusion.py has no such flag, so passing it

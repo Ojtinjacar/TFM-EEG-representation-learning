@@ -10,7 +10,6 @@ __pycache__/
 save/
 results_*/
 results/
-tests/
 # Private / large data: CIMCYC dataset (raw + processed EEG, ~2.6 GB)
 data/
 

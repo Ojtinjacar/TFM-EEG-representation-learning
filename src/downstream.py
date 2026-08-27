@@ -16,6 +16,7 @@ from models import (EnhancedAttentionLSTM, AttentionLSTMAutoencoder,
                     MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder)
 from interfusion import EMBEDDING_STATS, InterFusionEEG
 from checkpoint_naming import sidecar_path
+from window_loading import load_windows
 from utils import set_seed
 
 # ============================
@@ -359,9 +360,12 @@ def main(args):
     device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Usando dispositivo: {device}")
 
-    # Load data
-    X = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path)
+    # Load data. The amplitude statistics are refitted on the training subjects
+    # of this fold and then applied to every window, held-out ones included,
+    # exactly like a scaler fitted on train and applied to test.
+    X, meta_df = load_windows(
+        args.data_path, args.meta_path, fit_stats_excluding=args.test_subjects
+    )
 
     # Define target column and task description
     target_col = args.target

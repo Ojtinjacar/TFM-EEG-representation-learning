@@ -42,6 +42,7 @@ from utils import (
     compute_clustering_metrics,
     compute_similarity_matrix
 )
+from window_loading import load_windows
 
 # Available methods
 AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
@@ -617,10 +618,10 @@ def main():
     # Create output directories
     os.makedirs(args.save_fig_dir, exist_ok=True)
 
-    # Load data
+    # Load data. No fold is held out here: this entry point describes the latent
+    # space over the whole cohort, so the stored normalisation is the right one.
     print("[INFO] Loading data...", flush=True)
-    X = np.load(args.data_path)
-    meta = pd.read_csv(args.meta_path)
+    X, meta = load_windows(args.data_path, args.meta_path)
     print(f"  EEG shape: {X.shape}", flush=True)
     print(f"  Number of subjects: {meta['subject'].nunique()}", flush=True)
 

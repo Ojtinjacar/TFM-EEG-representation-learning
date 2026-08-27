@@ -19,6 +19,7 @@ import torch
 from torch.optim.lr_scheduler import StepLR
 
 from checkpoint_naming import interfusion_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from interfusion import InterFusionEEG, PretrainVAE
 from utils import split_dataset, create_dataloader, set_seed
 
@@ -175,8 +176,11 @@ def main():
     print(f"[INFO] Using device: {device}")
 
     print("[INFO] Loading data...")
-    X_np = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path)
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the pre-training windows never saw them.
+    X_np, meta_df = load_windows(
+        args.data_path, args.meta_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     if args.exclude_subjects:
         print(f"Excluding {len(args.exclude_subjects)} subjects for "
@@ -244,6 +248,7 @@ def main():
             "frequency": args.frequency,
             "fold_id": args.fold_id,
             "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "norm_stats": NORM_PROVENANCE,
             "seed": args.seed,
             "x_dim": int(X.shape[1]),
             "window": int(X.shape[2]),

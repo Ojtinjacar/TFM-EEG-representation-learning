@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
 from checkpoint_naming import triplet_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from utils import set_seed
 from models import EnhancedAttentionLSTM
 
@@ -71,11 +72,11 @@ def main(args):
     os.makedirs(args.plot_dir, exist_ok=True)
 
     # --- Data loading ---
-    data_path = os.path.join(args.data_path, "processed_windows.npy")
-    meta_path = os.path.join(args.data_path, "processed_metadata.csv")
-
-    X = np.load(data_path)
-    meta_df = pd.read_csv(meta_path)
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the training windows never saw them.
+    X, meta_df = load_windows(
+        args.data_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
@@ -202,6 +203,7 @@ def main(args):
         "frequency": args.frequency,
         "fold_id": args.fold_id,
         "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+        "norm_stats": NORM_PROVENANCE,
         "seed": getattr(args, "seed", None),
         "embedding_size": args.embedding_size,
         "margin": args.margin,

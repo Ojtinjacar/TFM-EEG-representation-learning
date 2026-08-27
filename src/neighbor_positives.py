@@ -4,7 +4,8 @@ Instead of building the positive with a synthetic perturbation (blind augmentati
 strategy takes as positive the **closest real window** to an anchor within the same session
 (and, by default, the same activity/block), under one of three distances:
 
-- ``cosine``: on the 24-D feature vector z-scored within subject (spectral profile);
+- ``cosine``: on the 40-D feature vector z-scored within subject (spectral profile:
+  band power and aperiodic fit over each of the four ROIs);
 - ``wasserstein``: on the ROI-normalised PSD (spectral shape);
 - ``riemann``: on the SPD spatial covariance matrix (cross-channel pattern).
 
@@ -235,6 +236,24 @@ class NeighborPositiveDataset:
     def coverage(self) -> float:
         """Fraction of anchors with at least one valid neighbour."""
         return float((self.neighbor_index >= 0).any(axis=1).mean())
+
+    def coverage_report(self) -> dict:
+        """Summarises how much of the training runs under the proposed regime.
+
+        An anchor with no admissible neighbour falls back to an augmented copy of
+        itself, which is the very scheme this strategy replaces. The fraction that
+        does so is therefore part of reading any result, not a diagnostic detail.
+
+        Returns:
+            dict: ``coverage`` (anchors with at least one neighbour),
+                ``coverage_full`` (anchors with the full k), and ``n_anchors``.
+        """
+        valid = (self.neighbor_index >= 0).sum(axis=1)
+        return {
+            "coverage": float((valid > 0).mean()),
+            "coverage_full": float((valid == self.neighbor_index.shape[1]).mean()),
+            "n_anchors": int(len(valid)),
+        }
 
     def __getitem__(self, i: int):
         anchor = self.X[i]

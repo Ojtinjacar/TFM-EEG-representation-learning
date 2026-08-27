@@ -53,7 +53,7 @@ RESULT_NAME = re.compile(
 
 FOLD_COLUMNS = ["family", "variant", "strategy", "metric", "descriptor", "zone",
                 "frequency", "target", "eval_mode", "fold", "nrmse", "r2", "rmse",
-                "campaign", "source_file"]
+                "neighbor_coverage", "campaign", "source_file"]
 SUBJECT_COLUMNS = ["family", "variant", "strategy", "metric", "descriptor", "zone",
                    "frequency", "target", "eval_mode", "fold", "subject_index",
                    "y_true", "y_pred", "campaign"]
@@ -136,7 +136,10 @@ def read_rows(path: str, campaign: str):
                           target=row["target"], eval_mode=row["eval_mode"],
                           fold=int(row["fold"]), campaign=campaign)
 
+            # Absent in results written before the coverage was carried through,
+            # so it is read as optional rather than required.
             fold_row = dict(common, nrmse=row["nRMSE"], r2=row["R2"], rmse=row["RMSE"],
+                            neighbor_coverage=row.get("neighbor_coverage", ""),
                             source_file=os.path.basename(path))
 
             packed = row.get("subject_avgs", "")

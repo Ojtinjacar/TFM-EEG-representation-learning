@@ -18,6 +18,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 
 from models import VariationalAttentionLSTMAutoencoder
 from checkpoint_naming import vae_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from utils import split_dataset, create_dataloader, set_seed
 from loss import build_prior, vae_elbo, kl_beta
 
@@ -152,17 +153,24 @@ def fit_model(
     if save_model_dir:
         os.makedirs(save_model_dir, exist_ok=True)
         model_path = os.path.join(save_model_dir, f"{model_name}.pth")
-        torch.save(model.state_dict(), model_path)
-        print(f"[INFO] Model saved to: {model_path}")
+        last_dir = os.path.join(save_model_dir, "last")
+        os.makedirs(last_dir, exist_ok=True)
+        last_path = os.path.join(last_dir, f"{model_name}.pth")
+        torch.save(model.state_dict(), last_path)
+
+        # The checkpoint the orchestrators pick up is the one the selection
+        # criterion chose. Keeping the best in a subdirectory left the last
+        # epoch to be evaluated instead, which made the criterion decorative.
+        # The last epoch stays under last/ for inspection, out of the globs.
         if best_state is not None:
-            # The best-val checkpoint lives in a subdirectory so that the
-            # orchestrators' save/models globs never pick it up by accident.
-            best_dir = os.path.join(save_model_dir, "best")
-            os.makedirs(best_dir, exist_ok=True)
-            best_path = os.path.join(best_dir, f"{model_name}.pth")
-            torch.save(best_state, best_path)
-            print(f"[INFO] Best-val model (epoch {best_epoch}, "
-                  f"target-beta ELBO {best_val:.6f}) saved to: {best_path}")
+            torch.save(best_state, model_path)
+            print(f"[INFO] Best-val model (epoch {best_epoch}, target-beta ELBO "
+                  f"{best_val:.6f}) saved to: {model_path}")
+            print(f"[INFO] Last-epoch model kept for inspection at: {last_path}")
+        else:
+            torch.save(model.state_dict(), model_path)
+            print(f"[INFO] No validation split produced a best state; last epoch "
+                  f"saved to: {model_path}")
 
     return model
 
@@ -316,8 +324,11 @@ def main():
     print(f"[INFO] Usando dispositivo: {device}")
 
     print("[INFO] Loading data...")
-    X_np = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path)
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the pre-training windows never saw them.
+    X_np, meta_df = load_windows(
+        args.data_path, args.meta_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     if args.exclude_subjects:
         print(f"Excluding {len(args.exclude_subjects)} subjects for pre-training: {args.exclude_subjects}")
@@ -389,6 +400,7 @@ def main():
             "frequency": args.frequency,
             "fold_id": args.fold_id,
             "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "norm_stats": NORM_PROVENANCE,
             "seed": getattr(args, "seed", None),
             "hidden_size": args.hidden_size,
             "latent_dim": args.latent_dim if args.latent_dim else args.hidden_size,
@@ -398,6 +410,7 @@ def main():
             "prior": "standard",
             "free_bits": args.free_bits,
             "kl_anneal_epochs": args.kl_anneal_epochs,
+            "checkpoint_selection": "best-val-target-beta",
             "epochs": args.epochs,
             "lr": args.lr,
             "n_windows": int(len(X)),

@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
 from checkpoint_naming import simclr_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from utils import set_seed
 from loss import NTXentLoss
 from models import EnhancedAttentionLSTM
@@ -175,11 +176,11 @@ def main(args):
 
     os.makedirs(args.save_dir, exist_ok=True)
 
-    data_path = os.path.join(args.data_path, "processed_windows.npy")
-    meta_path = os.path.join(args.data_path, "processed_metadata.csv")
-
-    X_np = np.load(data_path)
-    meta_df = pd.read_csv(meta_path)
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the pre-training windows never saw them.
+    X_np, meta_df = load_windows(
+        args.data_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
@@ -219,10 +220,14 @@ def main(args):
             augment_anchor=(args.neighbor_view1 == "augmented"), fallback="duplicate",
             seed=args.seed,
         )
+        coverage_report = full_dataset.coverage_report()
         print(f"Positives=neighbor metric={args.neighbor_metric} "
-              f"coverage={full_dataset.coverage():.3f} view1={args.neighbor_view1} "
+              f"coverage={coverage_report['coverage']:.3f} "
+              f"coverage_full={coverage_report['coverage_full']:.3f} "
+              f"view1={args.neighbor_view1} "
               f"aug_mode={args.aug_mode} (aug_mode only affects the fallback when view1=raw)")
     else:
+        coverage_report = None
         full_dataset = CIMCYCDataset(X, aug_mode=args.aug_mode)
         print(f"Positives=augment aug_mode={args.aug_mode}")
     train_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
@@ -273,11 +278,19 @@ def main(args):
         "frequency": args.frequency,
         "fold_id": args.fold_id,
         "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+        "norm_stats": NORM_PROVENANCE,
         "seed": getattr(args, "seed", None),
         "aug_mode": args.aug_mode,
         "positives": args.positives,
         "neighbor_metric": args.neighbor_metric if args.positives == "neighbor" else None,
         "neighbor_index_dir": args.neighbor_index_dir if args.positives == "neighbor" else None,
+        # How much of this run actually used a recorded neighbour rather than an
+        # augmented copy of the anchor. Reading a neighbour-based result without
+        # it means not knowing what fraction of it is the method under test.
+        "neighbor_coverage": (round(coverage_report["coverage"], 4)
+                              if coverage_report else None),
+        "neighbor_coverage_full": (round(coverage_report["coverage_full"], 4)
+                                   if coverage_report else None),
         "batch_size": args.batch_size,
         "lr": args.lr,
         "weight_decay": args.weight_decay,

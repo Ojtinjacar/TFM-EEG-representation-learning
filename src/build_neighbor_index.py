@@ -60,15 +60,39 @@ def roi_indices_from_channels(all_channels: list[str]) -> dict[str, list[int]]:
     }
 
 
-def compute_feat_z(X, meta: pd.DataFrame, roi_indices, sfreq: float) -> np.ndarray:
-    """(N, D) intra-subject z-scored spectral descriptors (cosine metric input)."""
+def compute_feat_z(X, meta: pd.DataFrame, roi_indices, sfreq: float,
+                   fit_stats_excluding=None) -> np.ndarray:
+    """(N, D) intra-subject z-scored spectral descriptors (cosine metric input).
+
+    Args:
+        X: Window tensor.
+        meta: Window metadata, aligned with ``X``.
+        roi_indices: Channel indices of each ROI.
+        sfreq: Sampling frequency in Hz.
+        fit_stats_excluding: Subjects held out in this fold. Their windows do not
+            contribute to the imputation values. The z-score is intra-subject and
+            therefore never crossed subjects to begin with.
+
+    Returns:
+        np.ndarray: The descriptor matrix, imputed and z-scored.
+    """
     feats = compute_epoch_features(X, meta, roi_indices, sfreq=sfreq, progress=False)
     if len(feats) != len(meta):
         raise ValueError(f"compute_epoch_features returned {len(feats)} rows, expected {len(meta)}")
     cols = [c for c in feats.columns if c.startswith(_DESCRIPTOR_PREFIXES)]
     matrix = feats[cols].to_numpy(dtype=np.float64)
-    # Impute NaNs (failed specparam fits) with the column mean.
-    col_mean = np.nanmean(matrix, axis=0)
+    # Impute NaNs (failed specparam fits) with the column mean. Held-out subjects
+    # are left out of that mean: otherwise a value the encoder trains on would
+    # have been informed by the very subjects the fold sets aside.
+    excluded = {str(s) for s in (fit_stats_excluding or [])}
+    if excluded:
+        fit_mask = ~feats["subject"].astype(str).isin(excluded).to_numpy()
+        if not fit_mask.any():
+            raise ValueError("fit_stats_excluding removed every window; nothing "
+                             "left to impute the descriptor from.")
+        col_mean = np.nanmean(matrix[fit_mask], axis=0)
+    else:
+        col_mean = np.nanmean(matrix, axis=0)
     nan_r, nan_c = np.where(np.isnan(matrix))
     matrix[nan_r, nan_c] = np.take(col_mean, nan_c)
     # Intra-subject z-score.
@@ -134,7 +158,8 @@ def main(args) -> None:
     reprs: dict[str, object] = {}
     if "cosine" in metrics:
         print("[neighbor_index] computing feat_z (cosine)...")
-        reprs["feat_z"] = compute_feat_z(X, meta, roi_indices, sfreq)
+        reprs["feat_z"] = compute_feat_z(X, meta, roi_indices, sfreq,
+                                         fit_stats_excluding=args.exclude_subjects)
     if "wasserstein" in metrics:
         print("[neighbor_index] computing psd_norm (wasserstein)...")
         _, reprs["psd_norm"] = compute_epoch_roi_psd(X, roi_indices, sfreq=sfreq)
@@ -156,6 +181,10 @@ def main(args) -> None:
         np.save(out_path, idx)
         d = _diagnostics(table, meta, n_total)
         d["metric"] = metric
+        # The exclusion travels with the index: an index that never saw a subject
+        # and one that did are not interchangeable, and only this column says which
+        # of the two a directory holds.
+        d["fit_stats_excluding"] = ";".join(sorted(str(s) for s in (args.exclude_subjects or [])))
         diag_rows.append(d)
         print(f"  saved {out_path} shape={idx.shape} | coverage={d['coverage']:.3f} "
               f"mean_lag={d['mean_lag']:.1f} same_subj={d['frac_same_subject']:.3f} "
@@ -189,4 +218,8 @@ if __name__ == "__main__":
     parser.add_argument("--same_activity", action="store_true", default=True,
                         help="Restrict neighbor to the same block (activity).")
     parser.add_argument("--seconds", type=float, default=5.0)
+    parser.add_argument("--exclude_subjects", nargs="*", default=None,
+                        help="Subjects held out in this fold. They stop contributing to the "
+                             "descriptor imputation. Build one index per fold and keep each in "
+                             "its own --output_dir.")
     main(parser.parse_args())

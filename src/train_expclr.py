@@ -23,6 +23,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader, Dataset
 
 from checkpoint_naming import expclr_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from apsd_baseline import PRESET_ZONES
 from build_expert_features import descriptors_for, quality_path, rois_of_zone
 from montage import resolve_processed_montage
@@ -168,8 +169,11 @@ def main(args):
     os.makedirs(args.plot_dir, exist_ok=True)
 
     windows_path = os.path.join(args.data_path, "processed_windows.npy")
-    X_np = np.load(windows_path)
-    meta_df = pd.read_csv(os.path.join(args.data_path, "processed_metadata.csv"))
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the pre-training windows never saw them.
+    X_np, meta_df = load_windows(
+        args.data_path, fit_stats_excluding=args.exclude_subjects
+    )
     features = np.load(args.expert_features)
     quality = None
     r2_path = quality_path(args.descriptor, os.path.dirname(args.expert_features))
@@ -322,6 +326,7 @@ def main(args):
         "num_epochs": args.num_epochs,
         "seed": args.seed,
         "exclude_subjects": sorted(args.exclude_subjects),
+        "norm_stats": NORM_PROVENANCE,
         "final_loss": losses[-1],
         "effective_dim": final["effective_dim"],
     })

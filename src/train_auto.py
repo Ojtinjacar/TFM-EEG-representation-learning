@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
 
 from checkpoint_naming import ae_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from models import AttentionLSTMAutoencoder
 from utils import split_dataset, create_dataloader, set_seed
 
@@ -216,8 +217,11 @@ def main():
 
     # Load data
     print("[INFO] Loading data...")
-    X_np = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path) # Load metadata to filter subjects
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the pre-training windows never saw them.
+    X_np, meta_df = load_windows(
+        args.data_path, args.meta_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
@@ -278,6 +282,7 @@ def main():
             "frequency": args.frequency,
             "fold_id": args.fold_id,
             "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "norm_stats": NORM_PROVENANCE,
             "seed": getattr(args, "seed", None),
             "hidden_size": args.hidden_size,
             "epochs": args.epochs,

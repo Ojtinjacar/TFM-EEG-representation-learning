@@ -21,10 +21,12 @@ from checkpoint_naming import (
     triplet_checkpoint_name,
     vae_checkpoint_name,
     interfusion_checkpoint_name,
+    sidecar_path,
 )
 from build_expert_features import descriptor_path, descriptors_for, rois_of_zone, zone_dir
 from train_vae import BETA_CONVENTION
 from montage import MONTAGE_SIDECAR, load_channel_names, resolve_processed_montage
+from window_loading import NORM_PROVENANCE
 
 # Where a run puts what it produces. The directory is derived from the run's name and never
 # given as a free argument: a path chosen per launch is a path nobody can predict, and the
@@ -132,11 +134,6 @@ def family_of(variant):
         return "SimCLR"
     if variant in EXPCLR_VARIANT_NAMES:
         return "ExpCLR"
-    # The InterFusion runner labels its results InterFusion-<tag> so two configurations can
-    # be told apart. Without this the label belongs to no family, which reads as a method
-    # with no evaluation modes and makes the resume check pass every fold untouched.
-    if variant.startswith("InterFusion-"):
-        return "InterFusion"
     return variant
 
 
@@ -160,6 +157,30 @@ def modes_of(variant):
     if family in FINE_TUNING_METHODS:
         modes.append("fine_tuning")
     return modes
+
+
+def neighbour_coverage_of(model_path):
+    """Reads back what fraction of anchors trained against a recorded neighbour.
+
+    The figure is written by the trainer into the checkpoint sidecar. Carrying it
+    into the results is what lets a neighbour-based number be read for what it
+    is: the remaining anchors fell back to an augmented copy of themselves, which
+    is the scheme this strategy sets out to replace.
+
+    Args:
+        model_path (str | None): Checkpoint the run evaluated, or None for the
+            methods that need no pre-training.
+
+    Returns:
+        float | None: The coverage, or None when the run used no neighbour index.
+    """
+    if not model_path:
+        return None
+    sc = sidecar_path(model_path)
+    if not os.path.exists(sc):
+        return None
+    with open(sc) as fh:
+        return json.load(fh).get("neighbor_coverage")
 
 
 def write_fold_results(results, results_dir):
@@ -188,6 +209,7 @@ def write_fold_results(results, results_dir):
             "fold": r["fold"], "method": r["method"], "zone": r["zone"],
             "frequency": r["frequency"], "eval_mode": r["eval_mode"], "target": r["target"],
             "nRMSE": r["nRMSE"], "R2": r["R2"], "RMSE": r["RMSE"],
+            "neighbor_coverage": r.get("neighbor_coverage"),
             "subject_avgs": ";".join(f"{yt},{yp}" for yt, yp in r["subject_avgs"]),
         } for r in sorted(rows, key=lambda r: r["eval_mode"])])
         path = os.path.join(results_dir, name)
@@ -573,6 +595,10 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         "frequency": frequency,
         "exclude_subjects": exclude_sorted,
         "seed": seed,
+        # Checkpoints trained before the normalisation was refitted per fold saw
+        # the held-out subjects through the amplitude statistics. They carry no
+        # such key, so the gate refuses them and they get retrained.
+        "norm_stats": NORM_PROVENANCE,
     }
 
     # Determine the model filename based on the method
@@ -1147,6 +1173,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                         "nRMSE": nrmse,
                         "R2": r2,
                         "RMSE": rmse,
+                        "neighbor_coverage": neighbour_coverage_of(model_path),
                         "subject_avgs": subject_avgs  # List of (y_true, y_pred) per-subject averages
                     }
 

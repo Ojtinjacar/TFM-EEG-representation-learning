@@ -57,7 +57,8 @@ _STRATEGIES = {
 }
 
 
-def build_ablation_table(reprs, meta_q, metric, strategy, *, k=2, same_activity=True, exclude_lag=0):
+def build_ablation_table(reprs, meta_q, metric, strategy, *, k=2, same_activity=True, exclude_lag=0,
+                         exclude_subjects=None):
     """Nearest-neighbor positives under an ablation grouping rule.
 
     Args:
@@ -70,6 +71,10 @@ def build_ablation_table(reprs, meta_q, metric, strategy, *, k=2, same_activity=
         same_activity: also require the positive to share the anchor's block.
         exclude_lag: exclude candidates with |epoch_index lag| <= this (0 = no temporal exclusion;
             irrelevant across subjects/sessions).
+        exclude_subjects: subjects held out in this fold. Their windows are barred from
+            being anyone's positive. Under 'crosssubj' the positive comes from another
+            subject, so without this a training anchor could be pulled towards a window of
+            a subject the fold is meant to have never seen.
 
     Returns:
         DataFrame with one row per (anchor, neighbor).
@@ -80,6 +85,7 @@ def build_ablation_table(reprs, meta_q, metric, strategy, *, k=2, same_activity=
         raise ValueError(f"strategy no valida: {strategy!r} (usar {list(_STRATEGIES)})")
     group_base, exclude_col = _STRATEGIES[strategy]
     group_cols = [group_base] + (["block"] if same_activity else [])
+    held_out = {str(s) for s in (exclude_subjects or [])}
 
     rows = []
     for _keys, grp in meta_q.groupby(group_cols):
@@ -87,6 +93,7 @@ def build_ablation_table(reprs, meta_q, metric, strategy, *, k=2, same_activity=
         gpos = grp.index.values.astype(int)
         ep = grp["epoch_index"].values
         excl = grp[exclude_col].values
+        cand_subjects = grp["subject"].values.astype(str)
         n = len(gpos)
         if n < 2:
             continue
@@ -95,6 +102,8 @@ def build_ablation_table(reprs, meta_q, metric, strategy, *, k=2, same_activity=
             mask = np.ones(n, bool)
             mask[i] = False
             mask &= (excl != excl[i])  # different subject (crosssubj) / different age (diffage)
+            if held_out:
+                mask &= ~np.isin(cand_subjects, list(held_out))
             if exclude_lag > 0:
                 mask &= np.abs(ep - ep[i]) > exclude_lag
             cand = np.where(mask)[0]
@@ -149,7 +158,8 @@ def main(args):
     reprs = {}
     if "cosine" in metrics:
         print("[ablation] computing feat_z (cosine)...")
-        reprs["feat_z"] = compute_feat_z(X, meta, roi_indices, sfreq)
+        reprs["feat_z"] = compute_feat_z(X, meta, roi_indices, sfreq,
+                                         fit_stats_excluding=args.exclude_subjects)
     if "wasserstein" in metrics:
         print("[ablation] computing psd_norm (wasserstein)...")
         _, reprs["psd_norm"] = compute_epoch_roi_psd(X, roi_indices, sfreq=sfreq)
@@ -165,6 +175,7 @@ def main(args):
         table = build_ablation_table(
             reprs, meta, metric, args.strategy,
             k=args.k, same_activity=args.same_activity, exclude_lag=args.exclude_lag,
+            exclude_subjects=args.exclude_subjects,
         )
         idx = neighbor_index_array(table, n_total, args.k)
         # The strategy is encoded by the output DIRECTORY; the filename stays
@@ -174,6 +185,7 @@ def main(args):
         d = _diagnostics(table, meta, n_total)
         d["metric"] = metric
         d["strategy"] = args.strategy
+        d["fit_stats_excluding"] = ";".join(sorted(str(s) for s in (args.exclude_subjects or [])))
         diag_rows.append(d)
         print(f"  saved {out_path} shape={idx.shape} | coverage={d['coverage']:.3f} "
               f"same_subj={d['frac_same_subject']:.3f} same_age={d['frac_same_age']:.3f}")
@@ -198,6 +210,10 @@ if __name__ == "__main__":
     p.add_argument("--channels_txt", default=None,
                    help="Montage of the dataset. Defaults to the channel_names.txt written next to the windows by postprocessing.py.")
     p.add_argument("--output_dir", required=True)
+    p.add_argument("--exclude_subjects", nargs="*", default=None,
+                   help="Subjects held out in this fold. They are barred from being anyone's "
+                        "positive and drop out of the descriptor imputation. Build one index "
+                        "per fold and keep each in its own --output_dir.")
     p.add_argument("--metrics", nargs="+", default=list(VALID_METRICS), choices=list(VALID_METRICS))
     p.add_argument("--k", type=int, default=2)
     p.add_argument("--exclude_lag", type=int, default=0)
