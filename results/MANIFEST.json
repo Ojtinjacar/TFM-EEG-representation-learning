@@ -1,1285 +1,974 @@
 {
-  "duplicate_fold_rows_dropped": 22,
-  "extracted_from": "/private/tmp/claude-501/-Users-juliantinjacareyes/55a32970-24b6-4407-8421-ce6a4168a2d3/scratchpad/extraccion",
+  "campaigns": [
+    "baselines_paper",
+    "expclr"
+  ],
+  "duplicate_fold_rows_dropped": 0,
   "files": [
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "a72f44a8f9e7c30f753619f5ce5894f2",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold0.csv",
+      "md5": "40170e16d997b1e85f0ccb217301b0ea",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "9211fe6d3d606503ac283ef7157bb986",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold1.csv",
+      "md5": "de8d5d6924f7b7434138f199bee502eb",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "a3894aaa4150a8c70ee4e34460cbaa45",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold2.csv",
+      "md5": "3dd3052f5e162735ab9eb17d36306d67",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "84943036ac8a898253340ff1fba1fff1",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold3.csv",
+      "md5": "f81deae630c14de82f16819d2c145d8a",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "674b085bf77a57d1f97ce69c80362447",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold4.csv",
+      "md5": "332a15d9d7f00ec49765829800ef0d36",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "cdac7b30b9a2e21a18fd89f83727efe1",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold5.csv",
+      "md5": "9cf3a19618f8d28ae222bcb9776d6632",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "c9bc4b99199d9c025017a22423468208",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold6.csv",
+      "md5": "59a4dc1e19cd9c79afacc098098d9df8",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "6444ddc0a03eff138aecca1dcbef4019",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold7.csv",
+      "md5": "a6f49b565a99532631e6835f9d852908",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "4e40cd432c447b56f8d237232f377ffe",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold8.csv",
+      "md5": "d7ec11f49b85fec436901395412d437e",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "1edb0d396c0327f0cf966808533fc6b7",
-      "rows": 22,
-      "source_dir": "save/zones/parietal"
+      "campaign": "baselines_paper",
+      "file": "AE_all_all_age_fold9.csv",
+      "md5": "1139576c434cd4ddf91214ef0063bd82",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "d202a87fefe97019726ff57772a14daa",
-      "rows": 28,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold0.csv",
+      "md5": "2b5e50dc2979f12331fcba88582a5ded",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "f7dafde4e2ec0d95b88cd54d0832fa4a",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold1.csv",
+      "md5": "0c0962dfc9c3ab4d26db629adb33ea01",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "be035f23d6197c2b0119ad04ecd2ba56",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold2.csv",
+      "md5": "6b938c18df62763307e332d5600804b9",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "d07e28251f0c306e642ca6d076bfd4ee",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold3.csv",
+      "md5": "0172072725dbc774e838bad25b7c7647",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "4b3d8e2b6aab5025f637e25bdebc3976",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold4.csv",
+      "md5": "e3f9d899f0d85cb5b1b0bc7cf6b6b2fd",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "6ca64f7cb0940e8ca403aafc550d1b58",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold5.csv",
+      "md5": "ad0c5ea0e0be2e78dc1c1a39f1ee6c17",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "3e712e8b58a90130ce084ee93eb70772",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold6.csv",
+      "md5": "da6977e5c97f98206890f8b8964e178b",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "4c34956c2c01b21da3243600b546e8d7",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold7.csv",
+      "md5": "b8bcec4b0cab80db4a254fa87c0fa983",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "05e7ef60ab4689a2eb1c629be7e7c757",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold8.csv",
+      "md5": "64f6ac114a10165a20219671df962578",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "271fb6701cc8a0f083aa70233991aaa7",
-      "rows": 22,
-      "source_dir": "save/zones/occipital"
+      "campaign": "baselines_paper",
+      "file": "MAE_all_all_age_fold9.csv",
+      "md5": "62a128cefe2f5706c9ebab3de794d6a4",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "4736c79268fa80deb73612d2789be48e",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold0.csv",
+      "md5": "5a2d6fbb61c5674e0965bd54f27f6c90",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "be82c33a24b2c7944948de25682317e5",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold1.csv",
+      "md5": "ea04602bd75bd408fb0581206bdbaa0b",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "1ee15b6ecea2f563da5b50a2f4d22801",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold2.csv",
+      "md5": "1d67cd7782a15a78eefff4baf996bd8a",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "639800197f7c3609ccbad774b5fc4311",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold3.csv",
+      "md5": "089ce9937d35accc70d4b3fde51d95fd",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "c7daa82511dc78189116b2354a09ed87",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold4.csv",
+      "md5": "e51f4505a682457a68dfc5ac4f85b0ad",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "982819caefc4ec347344f51b3d9cae64",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold5.csv",
+      "md5": "b4035fb2dbe0e5a0a44e64dd2bfc7887",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "41e9f27d249846f202e5246fd9348768",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold6.csv",
+      "md5": "ffdaa45f62e09cb980ddec5969ad0506",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "fdc6a445b8969770fa9f9bbf933f571e",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold7.csv",
+      "md5": "d1cccd69384fd56d93b9ad135026cda5",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "5aed6544b0387adfdfcd1724a3964be3",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold8.csv",
+      "md5": "72af022e59b252d8147eef01b6816cb5",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "c36632078abd550f8913a99415535e4c",
-      "rows": 22,
-      "source_dir": "save/zones/frontal"
+      "campaign": "baselines_paper",
+      "file": "PCA_all_all_age_fold9.csv",
+      "md5": "359f0fe0ac1f9d14bd0a22820697a4d6",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "15f930bd7f096955c5eb237de93c0cba",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold0.csv",
+      "md5": "32cf0ed30d3c4d1b45fdb64ef2041354",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "3d26fba03fee7dcdf20bde5d6ad84803",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold1.csv",
+      "md5": "b266e134a0a80c7ef064cec4c9c43bad",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "392c483f42e84974f0ae4740ccf537f1",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold2.csv",
+      "md5": "a4810eda9936c907ed4cf49622617855",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "443a92091150d780a42e65c6084d15f9",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold3.csv",
+      "md5": "b5d590eff506a849fd0ad8cf75605b6d",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "cea764d7603da2d88e92ae04f8e7dd86",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold4.csv",
+      "md5": "749232427fbfe997c4536ef8adb7ccc1",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "429546e14151f5f20c2f0334b8447e7e",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold5.csv",
+      "md5": "72ec4f4fbf26b71fb2c7cf794d1dd635",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "9eb5c7c791bed14a50bf3812404d8547",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold6.csv",
+      "md5": "0a32a94e401c7c0b9aa665bb49692c06",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "fa5a770e908c32cc72d7fcaed2499810",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold7.csv",
+      "md5": "48d837b700e34c6fb24fb3331e7b78da",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "e7b881c3d4bb882b67860bc9f0d635a8",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold8.csv",
+      "md5": "15b8cfcd6110cd6a0c80ceb60ccf7391",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "a4990ff06f179d3611f6af5434837aa4",
-      "rows": 20,
-      "source_dir": "save/nbr"
+      "campaign": "baselines_paper",
+      "file": "TripletLoss_all_all_age_fold9.csv",
+      "md5": "fd1286d6a65e7ac51c54b85a5a3815db",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "59d7264ccad29c4909045e023d929276",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold0.csv",
+      "md5": "a28c030c21259d6e89bf17485bd5c7b2",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "7ee2825dc226432d2dc92c57c472441a",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold1.csv",
+      "md5": "268c2df2ff789f97c57ab70941d7c54c",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "cc8330a73ffc20045f6871a8b67957c1",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold2.csv",
+      "md5": "c6fb0584b38dd41cfc7ec79c72f18096",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "974f4b02a91630e9ac82bb5725c5c720",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold3.csv",
+      "md5": "4a1edefc1ac98b8017de998727cfb71c",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "01c95bf11b7eab2d1aaee1acf2bfaa96",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold4.csv",
+      "md5": "525075c7ea406af80c7dc3c1a29b6d43",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "a275e4388d14a399a1e3d0d27c71e9b4",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold5.csv",
+      "md5": "452c35de3b8eca6d58ff13fa003b9166",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "3f1254e09e9f2ad15d19e18314ed2701",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold6.csv",
+      "md5": "5ae69f6ed50f4e34e6155035615e7ef8",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "b8ab334e1e27e54d6759be4592583657",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold7.csv",
+      "md5": "eb74146d992b69a212175f35c0710429",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "e2c127e11857d63dfcb04733cec55e02",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold8.csv",
+      "md5": "f2bf8ecec0ec2a4e807d424ad6f9b451",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "33ff5d6a3d5b4dfe3d401aaae89b2249",
-      "rows": 8,
-      "source_dir": "save/etapa_a"
+      "campaign": "baselines_paper",
+      "file": "supervised_all_all_age_fold9.csv",
+      "md5": "98fa40975cd8257081aa044cb8e97ec8",
+      "rows": 1
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "1a62fa4065c1c7320ff5380f26cfb40d",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold0.csv",
+      "md5": "491bf58bedcb063fa7a86673a700deae",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "5b6892df62f411d0b94dcc775ce96896",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold1.csv",
+      "md5": "0c15d1be82e0d9a041f1a3394bd3483f",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "dee5e5d0fbd336134dc442253ce24b83",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold2.csv",
+      "md5": "5ca6248f8e64e3485a33a1ad20cae29f",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "e75b0288352d260b0f5af997b674b6e1",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold3.csv",
+      "md5": "07cc96133bdf1d819c548f88e9504a03",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "ad10fc046099d7bcd47a1892cd232a25",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold4.csv",
+      "md5": "8b424c04f183ad00223d26ee524f50c0",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "f3032faef946e6b8525e8abe9551b880",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold5.csv",
+      "md5": "454a5d9ac61b50131c56acaa86e21087",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "d9fa56b8ba6f06486877f2e4259002ca",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold6.csv",
+      "md5": "9779777fdc120a3c7093e3ec770a1062",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "8ba7a3d05bfb32a8546c2f7f9b3bd053",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold7.csv",
+      "md5": "c56c1ac55cd30db1684a28e43b8db96d",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "f5ec8766b746aaa22a56c408b4d80f8c",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold8.csv",
+      "md5": "e0ee989e4ab8156df82a24c260484a5e",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "5cd230f564ea9c24d3f1f4fec4e590f4",
-      "rows": 10,
-      "source_dir": "save/baseline_ucles"
+      "campaign": "expclr",
+      "file": "ExpCLR-aper_all_all_age_fold9.csv",
+      "md5": "1f4fe75617b4e3078e2fa99c48d83de1",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "6cc7c889b34f485bd535ca0db625c34d",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold0.csv",
+      "md5": "4d5fe492810d8080bc45a18f64527767",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "67185596aecca1cccc5e20af77278688",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold1.csv",
+      "md5": "cf1c14ecb3cc425f810cd5680d3a516c",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "a150c8a0b243e378d3b2e2ba492b3e9f",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold2.csv",
+      "md5": "96988f5a0ae8e918ccf91b5419054440",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "9b6ed3ad71133c85468553393bd58b58",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold3.csv",
+      "md5": "dda4583eb3a46b3dfd014e987f0ea594",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "c254d0973374c333bad89b826803c4bc",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold4.csv",
+      "md5": "14b18d1b9babeed86d9dcf25699f45d9",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "79f8b43f14a2de640445816723e879fe",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold5.csv",
+      "md5": "903fe2fe9c5a8f7a38247955abf3da98",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "a46cc3c4ac7d01452fbdb0d14d546288",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold6.csv",
+      "md5": "bc3ec527a2dbc34fba1253056c6b7e45",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "e6212b037df507d6c54e69e3b6ea62ee",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold7.csv",
+      "md5": "5ecbeedb8d5b89570994cf9360120ca8",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "430397b74d27daa0c2672ba9da8a758c",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold8.csv",
+      "md5": "580d9dd4048635bed5d3ce16fb416c9e",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "12db425b4eb0a2b0acf1b309716db613",
-      "rows": 2,
-      "source_dir": "save/c1a"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_all_all_age_fold9.csv",
+      "md5": "892e870789aafb41987b9c84e12e8877",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "cea6b69469493cc06dbf8967e178b732",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold0.csv",
+      "md5": "e02ca5b65aabd0ae6c02573dbf337ca3",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "a6233922bd691bb727b64ea4d91442d2",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold1.csv",
+      "md5": "906845aec24dbc4d8f8cb59b2b36d5b5",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "85d253d2ccb26bed221a22e3120622c2",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold2.csv",
+      "md5": "141addac0a83729afce88606cfe20110",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "7a6ff4f845e6913e782a8172016d0b30",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold3.csv",
+      "md5": "e36700c7e2bb6047b3e1b725a5fafb0a",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "1d9de0c903b188354003be2d9264dec4",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold4.csv",
+      "md5": "f6a15330a6132cc825a50a2d596304de",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "d2ae08a7577c09584875ed08b0e42ff2",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold5.csv",
+      "md5": "c84ff90a4ec718a8a3f729ede265ffbf",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "7926302594a6d540afae2204699d32ba",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold6.csv",
+      "md5": "61cfdca3bf91b6333b900e5f09ecb7b5",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "21c927177eb086fa05f710414ea3dc2f",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold7.csv",
+      "md5": "4d70d5ee13f2000da1142f4418e86ac7",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "f54d585c23b3cf6d38f153b88e093883",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold8.csv",
+      "md5": "dc8b7802a0c40461e6a75ea983538b09",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "fb7cd9d45da59c55a74d0c5043f48de1",
-      "rows": 2,
-      "source_dir": "save/expclr/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_central_all_age_fold9.csv",
+      "md5": "2a4ff00a3f50da655360bdc7cae06697",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "A",
-      "md5": "01e48a881981976c2eea748f25a0c00d",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold0.csv",
+      "md5": "a128a4b24e1e50149f320f0d4137b854",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "A",
-      "md5": "b75c32dc91b324bd02094c47a80049ab",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold1.csv",
+      "md5": "cd1f8e66285f4550afcf1ac49d1aa4af",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "A",
-      "md5": "5c4f42fe6ee75ca8e0a1b771c2dd7cbd",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold2.csv",
+      "md5": "12f2e3b82f66f80646f0f33e24266769",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "A",
-      "md5": "4b6f0d21af656ab84b86e827cadd7efe",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold3.csv",
+      "md5": "a9c82f3352ccbeb0cf2b780a1fd0dcd6",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "A",
-      "md5": "1e671bb9c76de35e0d315b613254f99a",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold4.csv",
+      "md5": "a5b64d2c141367504660e1713d5d0abf",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "A",
-      "md5": "e92fbc4f17737b70ccd879cbf9778f84",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold5.csv",
+      "md5": "32b203290d46834a406f76c3eee9c937",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "A",
-      "md5": "b4a4987c59d480f958ed12bb05ad0365",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold6.csv",
+      "md5": "529b1708821431cd04d2ab5ec24839d1",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "A",
-      "md5": "9576a17459ebfa6702f8ca54c076655a",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold7.csv",
+      "md5": "cc15375162b5216c161b77b68d7e5e5f",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "A",
-      "md5": "c9e7968007cb42e07c84d210bb3ad879",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold8.csv",
+      "md5": "8d474cd9a6d5cd1f3b3033bbafaf34b8",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "A",
-      "md5": "2a27c299970610a36a772edbcf23b0ac",
-      "rows": 2,
-      "source_dir": "save/vae10"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_frontal_all_age_fold9.csv",
+      "md5": "aad33c41d3f197292d82dcf4c5e5a732",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "B",
-      "md5": "164207fb7749c4a386351e7e94c32a2e",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold0.csv",
+      "md5": "850f405e08603fb00686bf5f2743f855",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "B",
-      "md5": "2d2c19d687d7ea8a664b78919d83ae29",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold1.csv",
+      "md5": "16cc77e0d31c3a2c7be141a1edc68fb5",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "B",
-      "md5": "cc7cea0b899a6b4fae2054d7171e4c19",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold2.csv",
+      "md5": "8267a34c59a01fe7f3c8ef4c8c596d7f",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "B",
-      "md5": "e87322089cd21d6d077f0dcf896ad17a",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold3.csv",
+      "md5": "4b347909ccd27f903534691131764959",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "B",
-      "md5": "522c65c9e61bed9a2f8fd3c178e3ea84",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold4.csv",
+      "md5": "8ad1539cfcf618ea1855b68ca9d21d1b",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "B",
-      "md5": "843e09a027a249fa6db0dc2670454ba9",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold5.csv",
+      "md5": "18884a29070912e485cfe69935fb8557",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "B",
-      "md5": "dbf8c8ac9cee92b205e02222da872768",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold6.csv",
+      "md5": "9892e98c4ac2747093dc8bf38260166c",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "B",
-      "md5": "06696193e3534ee208c66e2fed99713c",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold7.csv",
+      "md5": "7491516eb2282631ea05321e8cc7f6c8",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "B",
-      "md5": "f6ac47f4934cebed95613d1b27e32a93",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold8.csv",
+      "md5": "bb41a4888e16d383d66b412bd1c28d82",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "B",
-      "md5": "558fab8daa83ab2aeaeeef7881be9d3f",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_occipital_all_age_fold9.csv",
+      "md5": "55abbe915d91958d43d03b80833ec935",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "B",
-      "md5": "f15a1d26024fca754f32c4a3b258e869",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold0.csv",
+      "md5": "3b0ba81cc0135281ddd11c068e9d3f05",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "B",
-      "md5": "b223819a30ba3b8e2e90258d22b80b86",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold1.csv",
+      "md5": "d385d396584805238115516c4d2c0508",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "B",
-      "md5": "5dd5c8db2f48f20e5e275ffb0f529388",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold2.csv",
+      "md5": "2c2ffc245ef198ae1c917c9d001bdcf8",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "B",
-      "md5": "02418ebac922a7fd46d83dfbd29ff8fc",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold3.csv",
+      "md5": "3c1acb2a1f1d8b1e3e25d4850edc52bf",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "B",
-      "md5": "53b3bafbb84a34b0cf164f00811d0a33",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold4.csv",
+      "md5": "bf65996b77513c4a5563a89913e65361",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "B",
-      "md5": "b706bdb4d8bf342e125a58fdc4885323",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold5.csv",
+      "md5": "452d3e99df664f5f7ae8096dbdafdf73",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "B",
-      "md5": "6e25095bef01f2480c854549ddf1338d",
-      "rows": 22,
-      "source_dir": "save/zones/central"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold6.csv",
+      "md5": "4fd5b601318533992aab551b40c79675",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "B",
-      "md5": "fba99bfd7988856b660b4153793720b9",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold7.csv",
+      "md5": "73fe0291e89636774d675c158c7e8af7",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "B",
-      "md5": "51f3f5567df67577a486c3687250fdaf",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold8.csv",
+      "md5": "dcb9b65228de1784214ee15fd65cdc4f",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "B",
-      "md5": "8901107ecad484d3341d337a9bd9c6be",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR-full_parietal_all_age_fold9.csv",
+      "md5": "bfe0ce3f64ae7fb8c5a2ed37ca387aac",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "B",
-      "md5": "76edc9df904458dc43b4f4ba31bd43db",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold0.csv",
+      "md5": "4acb41a725da9b3b2da8b1a1df59e18d",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "B",
-      "md5": "82cad4beeba1d1d5be0667de1af39b55",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold1.csv",
+      "md5": "c282cf5fffc06138f5c13d767840184d",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "B",
-      "md5": "50987ddce0f85b2931b5e5553240c574",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold2.csv",
+      "md5": "50dfbf8398220824c7d5c5a2125cdf9d",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "B",
-      "md5": "81580b9db85e5d847d693789ce094ccc",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold3.csv",
+      "md5": "a0d257c368959cc0d70588f8c5ff5885",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "B",
-      "md5": "32d59f320a2df282354374827b604cc0",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold4.csv",
+      "md5": "558aca0574a3101f2b7f4385fc7e4030",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "B",
-      "md5": "369d2a88634114066f108bc4b191ed04",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold5.csv",
+      "md5": "8f89e132eca525bba852dd8de36505f3",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "B",
-      "md5": "af028c3241811dd329dcfb04ac9b52d5",
-      "rows": 2,
-      "source_dir": "save/expclr_P_aper/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold6.csv",
+      "md5": "ed21cbb988b6ee840a2fd55958c875ee",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "C",
-      "md5": "91dc77f6d757572314d4c5f369d73c0a",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold7.csv",
+      "md5": "c6fe4e67d32d2d49eb83eb3de2de91cb",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "C",
-      "md5": "b96a832d6a8a59c2d0083ee1782ef3f9",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold8.csv",
+      "md5": "5d2b98fc78f32b112254bfefda40e065",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "C",
-      "md5": "c3d56a14b7c814f9b43bbcb17ce0f558",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_all_all_age_fold9.csv",
+      "md5": "b5f2251ea19402c4199ae0de547fe0de",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "C",
-      "md5": "0d6fc212fd64d4b49c9ff92cc86ed837",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold0.csv",
+      "md5": "ead4af88fa37c7c13eaf1d7931260e62",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "C",
-      "md5": "3ceade6be673b8236be473361e3ba6ea",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold1.csv",
+      "md5": "f1090a00c5e289200dea1c22b1c86526",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "C",
-      "md5": "7c30ac7c485c52b5865fd425d414da7d",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold2.csv",
+      "md5": "44a92ea9fa4dd4ebf922d747d1799340",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "C",
-      "md5": "b95ecc1580cd950ff66eab50032f710e",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold3.csv",
+      "md5": "591e888424880ec946d5624d10be43ed",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "C",
-      "md5": "9f61959337946a5d1220bd349e878f3e",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold4.csv",
+      "md5": "07c441a0ab9130707e8182ce4e3cc139",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "C",
-      "md5": "bedde566de97e2c392fc8371bf1679c2",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold5.csv",
+      "md5": "83f162d8e98390fad7a6cccd67c043df",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "C",
-      "md5": "930b19cee7617263222bbf09c565c744",
-      "rows": 2,
-      "source_dir": "save/c1a_frontal"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold6.csv",
+      "md5": "310a768c2415814acfe5426a089a3672",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "C",
-      "md5": "512b612203fec7213738f1d44ee6b556",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold7.csv",
+      "md5": "89689c2ba0fbf1720de6b2ca7e5c94cd",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "C",
-      "md5": "bef0eb5ba2563f381b23a1a0755edb52",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold8.csv",
+      "md5": "b44cb3c1478d873df3ef08f051a380f1",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "C",
-      "md5": "f15eed94acf42afd203d69ea9d74d11a",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_central_all_age_fold9.csv",
+      "md5": "4fd47d699d3b780e81548ec22c510858",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "C",
-      "md5": "75acf195915f302ce4853c28ddeb57d6",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold0.csv",
+      "md5": "8b6aaf21f57e4704e5789adbd2919eea",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "C",
-      "md5": "80621dc15a1b39464cd22c1af3613849",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold1.csv",
+      "md5": "cac8abd786c90da82f4e7349ffa06b40",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "C",
-      "md5": "bc0564ffe3896d7821aac17bdec109b3",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold2.csv",
+      "md5": "e228c484a4329219e26c5fea489db754",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "C",
-      "md5": "b1c227fa3b09d3bc7384352acc6f9c52",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold3.csv",
+      "md5": "9176c073bceb0c7ead4bcc3d9ccec563",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "C",
-      "md5": "7962be7c1d86994427321b6c15dce697",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold4.csv",
+      "md5": "c6b28683ef4a8ecf798f1f48d5ad1018",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "C",
-      "md5": "ff235d79e7476b0fff4d64ff4f0982eb",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold5.csv",
+      "md5": "25622ebafa9d09f1aedde8f41682058f",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "C",
-      "md5": "ecd0fa5f70ab6bdaaeee12330f152a84",
-      "rows": 2,
-      "source_dir": "save/c1a_occipital"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold6.csv",
+      "md5": "309b9e5c7957155ac92b17c582fe9e48",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "C",
-      "md5": "6ed2415b87a34c6ca6d7dfa65d2ee4c3",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold7.csv",
+      "md5": "9b09b8338825d7f6894b3d4f300f4d57",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "C",
-      "md5": "b7045ae865ad5a771f435cab2ce689ac",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold8.csv",
+      "md5": "1b30e57eecf340d344d4ffed5a417462",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "C",
-      "md5": "b66d22649499f9d522aa7887500b0ef9",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_frontal_all_age_fold9.csv",
+      "md5": "af50eaccec82941c8ad73dee349454a8",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "C",
-      "md5": "0890d594c991ed97a5b60ef1aea0f711",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold0.csv",
+      "md5": "257bb310cddd46b23a95d618f5bbdcbd",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "C",
-      "md5": "058f625b6ccc94ed003144b0016cba23",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold1.csv",
+      "md5": "0aae9809ef6b6f8d66606c917f8d5659",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "C",
-      "md5": "f4a4dad5f937a544a7a490cfb2c908f4",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold2.csv",
+      "md5": "872610713663ed3e5bafd5eb6cd21dac",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "C",
-      "md5": "bd35bc4adcce017fa9270645987885e0",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold3.csv",
+      "md5": "11ad0a473849cf32753ad310282f2b36",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "C",
-      "md5": "10b2de9bbb4b210c2d0a1103f527fc7d",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold4.csv",
+      "md5": "8f836500a19c2742c868957d61d0bc8a",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "C",
-      "md5": "be56906ac636f9187fd6805ebfc49bc4",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold5.csv",
+      "md5": "02a6a074ccbd9c249469908b11a784bf",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "C",
-      "md5": "95532d73c08eaa3602ea8d49d16d7bb6",
-      "rows": 2,
-      "source_dir": "save/c1a_parietal"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold6.csv",
+      "md5": "b7be877acbb78676a700c0df736e9959",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "D",
-      "md5": "8e336b9ab26742e8d2851cc9bb921b44",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold7.csv",
+      "md5": "61027424a03818fcaca001ff69adcb76",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "D",
-      "md5": "ec046e2f0b2b1b944bb53f1fcd69f344",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold8.csv",
+      "md5": "98664ca080c4087303e6bf654a8821df",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "D",
-      "md5": "51c328534f140b1aa1eee1195c7b7853",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_occipital_all_age_fold9.csv",
+      "md5": "257c39e67083c9af9a045d2392a1bbd0",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "D",
-      "md5": "f29d7568263ed18c870e8a0fd1d58cdc",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold0.csv",
+      "md5": "daea0a8fec031a4fe3691303ae34747b",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "D",
-      "md5": "935da449c21cea4040f1c9cc826ee718",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold1.csv",
+      "md5": "5de8f29134d6eeae80c573c23fa9cbfc",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "D",
-      "md5": "67e4327174512bea3489f34f0f68260a",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold2.csv",
+      "md5": "2de9ed82cd12ce01c639d7f3c7dfe0f6",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "D",
-      "md5": "090e84213ea3ee958dcd99219321d8fd",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold3.csv",
+      "md5": "9651afed51c4380199e1791fc36b0509",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "D",
-      "md5": "7d09b196b8730ffaa5805624783ea917",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold4.csv",
+      "md5": "f768753b9a8c7f52f2cfe3b2c46dc487",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "D",
-      "md5": "f7d0e8d6531c1fceb9ff92c5841d97b9",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold5.csv",
+      "md5": "f53f040feb933758ba25e9f5cda1e069",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "D",
-      "md5": "780f04fe47b88f1b1f2b9438c951564a",
-      "rows": 2,
-      "source_dir": "save/c1a_all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold6.csv",
+      "md5": "bccd0d96223373275a69592e9e4568d7",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "D",
-      "md5": "a59f9cc955849671d72a7fd121c71cdb",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold7.csv",
+      "md5": "417b81dc82f94ac2ad935946ee5553fe",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "D",
-      "md5": "24e559c58bc3af9840e3bc9bdd0ad045",
-      "rows": 22,
-      "source_dir": "save/zones/all"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold8.csv",
+      "md5": "3022565fa91585200ef6318e68f62d79",
+      "rows": 2
     },
     {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "D",
-      "md5": "93cfb9da9a4b045c42aa8a69cc297d2c",
-      "rows": 22,
-      "source_dir": "save/zones/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "D",
-      "md5": "40d95f0bdd494ba34884465e9efa745d",
-      "rows": 22,
-      "source_dir": "save/zones/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "D",
-      "md5": "4b40e330dece0909d50273ebba497984",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "D",
-      "md5": "2056901c7466d5a17662ee92fe314de4",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "D",
-      "md5": "b425f5caa9c9157cfe4ecdd273e29fca",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "D",
-      "md5": "f27505d468a1b8d132be2c9c24700adf",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "D",
-      "md5": "23e2741a97ff90046b4acc150844e288",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "D",
-      "md5": "9b47dbef46566e14b3edbaa42102d855",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "D",
-      "md5": "3872ecd65094cfa7ed5f2ee9ecdb5ee2",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "D",
-      "md5": "4273093b46aa8bd3f9a478fd18967879",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "D",
-      "md5": "c96f886cd8cc2f9be5b0a224d442b981",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "D",
-      "md5": "6348e1cd42a5368d649bd8a5009217e0",
-      "rows": 2,
-      "source_dir": "save/expclr_P_full/all"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds0-0.csv",
-      "machine": "D",
-      "md5": "10a6ed64c93f1d165a9355329a1384c3",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds1-1.csv",
-      "machine": "D",
-      "md5": "12450d9cd6b4e77e5f0e7e6f636e9750",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds2-2.csv",
-      "machine": "D",
-      "md5": "22dfeb5c3f8444caf8412bcaf762da3b",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds3-3.csv",
-      "machine": "D",
-      "md5": "df6845f2e3c944dcfa5180d4eea91312",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds4-4.csv",
-      "machine": "D",
-      "md5": "7f057132bd5439139584abbb160345e5",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds5-5.csv",
-      "machine": "D",
-      "md5": "bea31783b4e43865a8f9bd5e58ec96b1",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds6-6.csv",
-      "machine": "D",
-      "md5": "deafc06830cebb96f707f9fe01fe83f9",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds7-7.csv",
-      "machine": "D",
-      "md5": "9174d7e44fa36ea993d44582a803a29b",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds8-8.csv",
-      "machine": "D",
-      "md5": "3282369156c287287d4602e024a7f614",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
-    },
-    {
-      "file": "downstream_raw_results_kfold_folds9-9.csv",
-      "machine": "D",
-      "md5": "4fa7a69f8b081db6d81ce7f95e4588d4",
-      "rows": 2,
-      "source_dir": "save/c1a_central"
+      "campaign": "expclr",
+      "file": "ExpCLR_parietal_all_age_fold9.csv",
+      "md5": "3d709f4a719afa6c98fca2e87c21645a",
+      "rows": 2
     }
   ],
-  "fold_rows": 1680,
-  "incomplete_runs_dropped": {
-    "SimCLR-lag0-cosine/occipital/all/age/fine_tuning": 1,
-    "SimCLR-lag0-cosine/occipital/all/age/linear_probe": 1,
-    "SimCLR-lag0-riemann/occipital/all/age/fine_tuning": 1,
-    "SimCLR-lag0-riemann/occipital/all/age/linear_probe": 1,
-    "SimCLR-lag0-wasser/occipital/all/age/fine_tuning": 1,
-    "SimCLR-lag0-wasser/occipital/all/age/linear_probe": 1
-  },
-  "repo_commit": "577353c",
-  "runs_with_several_provenances": 24,
-  "subject_rows": 7560
+  "fold_rows": 300,
+  "incomplete_runs_dropped": {},
+  "repo_commit": "4c517bc",
+  "source": "save",
+  "subject_rows": 1350
 }

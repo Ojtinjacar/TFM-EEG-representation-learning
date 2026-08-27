@@ -1,9 +1,9 @@
 """Pools the fold results of every run into one comparison base.
 
-Results were written by launches that each chose their own output directory, so the zone
-of a run lives in the path rather than in the rows, and some method labels carry the zone
-inside them. This normalises both: it recovers the zone, splits the packed variant label
-into the dimensions a query actually asks about, and writes one folder per method.
+Each run writes ``save/<run>/results/<variant>_<zone>_<band>_<target>_fold<k>.csv``, so
+every dimension that tells two results apart is already in the name and in the row. This
+reads that tree, splits the packed variant label into the dimensions a query actually asks
+about, and writes one folder per method.
 
 Two tables come out of it, because the questions are answered at different levels. The
 fold table carries what the pipeline computed, which is a metric taken *within* each
@@ -11,9 +11,13 @@ subject and then averaged. The subject table unpacks the per-subject averages, w
 what pooling over the whole cohort needs; that pooled figure is the one the writeup
 reports, so a notebook that reads ``r2`` from the fold table is reading something else.
 
+Nothing here records which machine produced a result. The work is split across machines by
+method, but the split is an operational detail: the same campaign run on one machine or on
+four has to give the same base.
+
 Run from the repository root::
 
-    python src/consolidate_results.py --source <dir with <machine>/<save path>/*.csv>
+    python src/consolidate_results.py --source save
 """
 
 import argparse
@@ -26,7 +30,6 @@ import subprocess
 from collections import defaultdict
 
 ZONES = ("occipital", "parietal", "frontal", "central", "all")
-WHOLE_HEAD = "all"
 
 # The metric suffix each run wrote, and the name it stands for.
 _METRICS = {"cosine": "cosine", "wasser": "wasserstein", "riemann": "riemann"}
@@ -40,78 +43,58 @@ _EXPCLR_DESCRIPTOR = {
     "ExpCLR-aper": "P_aper",
 }
 
+# The convention a result file follows. Anything else under results/ is not a result: the
+# pipeline also drops aggregate files there when it closes a zone, and pooling those would
+# count every fold twice.
+RESULT_NAME = re.compile(
+    r"^(?P<variant>.+?)_(?P<zone>" + "|".join(ZONES) + r")"
+    r"_(?P<frequency>[^_]+)_(?P<target>.+)_fold(?P<fold>\d+)\.csv$"
+)
+
 FOLD_COLUMNS = ["family", "variant", "strategy", "metric", "descriptor", "zone",
                 "frequency", "target", "eval_mode", "fold", "nrmse", "r2", "rmse",
-                "canonical", "campaign", "machine", "source_dir", "source_file"]
+                "campaign", "source_file"]
 SUBJECT_COLUMNS = ["family", "variant", "strategy", "metric", "descriptor", "zone",
                    "frequency", "target", "eval_mode", "fold", "subject_index",
-                   "y_true", "y_pred", "canonical", "campaign", "machine", "source_dir"]
+                   "y_true", "y_pred", "campaign"]
 
 
 class ConsolidationError(RuntimeError):
     """Raised when a result file cannot be attributed to a run."""
 
 
-def zone_of(source_dir: str, row: dict, method: str) -> str:
-    """Recovers the zone of a result row.
-
-    Newer runs carry it as a column; older ones only in the output directory, and the
-    InterFusion launches also glued it onto the method label.
+def is_result_file(name: str) -> bool:
+    """Says whether a filename is a per-fold result of the convention.
 
     Args:
-        source_dir (str): Directory the file came from, relative to ``save``.
-        row (dict): The row as read, which may carry a ``zone`` column.
-        method (str): Raw method label of the row.
+        name (str): Basename of the file.
 
     Returns:
-        str: One of :data:`ZONES`.
-
-    Raises:
-        ConsolidationError: If no zone can be recovered.
+        bool: True if the name carries variant, zone, band, target and fold.
     """
-    if row.get("zone") in ZONES:
-        return row["zone"]
-    for zone in ZONES:
-        if method.endswith(f"_{zone}"):
-            return zone
-    parts = [p for p in source_dir.split("/") if p]
-    if parts and parts[-1] in ZONES:
-        return parts[-1]
-    for zone in ZONES:
-        if zone != WHOLE_HEAD and parts and parts[-1].endswith(f"_{zone}"):
-            return zone
-    # Everything else was a whole-montage run: those launches never named the zone
-    # because there was only one.
-    return WHOLE_HEAD
+    return RESULT_NAME.match(name) is not None
 
 
-def normalise(method: str, zone: str) -> dict:
+def normalise(method: str) -> dict:
     """Splits a packed method label into the dimensions a query asks about.
 
     Args:
         method (str): Raw ``method`` value of the row.
-        zone (str): Zone already recovered for the row.
 
     Returns:
         dict: ``family``, ``variant``, ``strategy``, ``metric`` and ``descriptor``.
     """
-    variant = method
-    for z in ZONES:
-        if variant.endswith(f"_{z}"):
-            variant = variant[: -len(f"_{z}")]
-            break
-
-    out = {"family": variant, "variant": variant,
+    out = {"family": method, "variant": method,
            "strategy": "", "metric": "", "descriptor": ""}
 
-    if variant.startswith("InterFusion"):
+    if method.startswith("InterFusion"):
         out["family"] = "InterFusion"
-    elif variant in _EXPCLR_DESCRIPTOR:
+    elif method in _EXPCLR_DESCRIPTOR:
         out["family"] = "ExpCLR"
-        out["descriptor"] = _EXPCLR_DESCRIPTOR[variant]
-    elif variant.startswith("SimCLR"):
+        out["descriptor"] = _EXPCLR_DESCRIPTOR[method]
+    elif method.startswith("SimCLR"):
         out["family"] = "SimCLR"
-        parts = variant.split("-")
+        parts = method.split("-")
         if len(parts) == 3 and parts[1] in _STRATEGIES:
             out["strategy"] = parts[1]
             out["metric"] = _METRICS.get(parts[2], parts[2])
@@ -121,32 +104,39 @@ def normalise(method: str, zone: str) -> dict:
     return out
 
 
-def read_rows(path: str, machine: str, source_dir: str):
+def read_rows(path: str, campaign: str):
     """Reads one result file into normalised fold and subject rows.
+
+    The zone and the band are read from the row and never inferred from where the file
+    sits: a result that depends on its own path is a result somebody can move and change.
 
     Args:
         path (str): Path of the CSV.
-        machine (str): Machine the file came from.
-        source_dir (str): Directory of the file, relative to ``save``.
+        campaign (str): Run the file belongs to.
 
     Yields:
         tuple: ``(fold_row, subject_rows)`` per row of the file.
 
     Raises:
-        ConsolidationError: If a row carries no per-subject averages.
+        ConsolidationError: If a row lacks its zone or band, or carries no per-subject
+            averages.
     """
     with open(path) as fh:
         for row in csv.DictReader(fh):
             method = row["method"]
-            zone = zone_of(source_dir, row, method)
-            names = normalise(method, zone)
-            common = dict(names, zone=zone,
-                          frequency=row.get("frequency") or "all",
+            zone, frequency = row.get("zone"), row.get("frequency")
+            if zone not in ZONES or not frequency:
+                raise ConsolidationError(
+                    f"{path}: {method} fold {row.get('fold')} records zone={zone!r} "
+                    f"frequency={frequency!r}. Both belong in the row; a result whose zone "
+                    "has to be guessed from its directory is not attributable."
+                )
+
+            common = dict(normalise(method), zone=zone, frequency=frequency,
                           target=row["target"], eval_mode=row["eval_mode"],
-                          fold=int(row["fold"]))
+                          fold=int(row["fold"]), campaign=campaign)
 
             fold_row = dict(common, nrmse=row["nRMSE"], r2=row["R2"], rmse=row["RMSE"],
-                            machine=machine, source_dir=source_dir,
                             source_file=os.path.basename(path))
 
             packed = row.get("subject_avgs", "")
@@ -158,49 +148,45 @@ def read_rows(path: str, machine: str, source_dir: str):
             subject_rows = []
             for i, pair in enumerate(p for p in packed.split(";") if p.strip()):
                 y_true, y_pred = pair.split(",")
-                subject_rows.append(dict(common, subject_index=i, y_true=y_true,
-                                         y_pred=y_pred, machine=machine,
-                                         source_dir=source_dir))
+                subject_rows.append(dict(common, subject_index=i,
+                                         y_true=y_true, y_pred=y_pred))
             yield fold_row, subject_rows
 
 
 def collect(source: str):
-    """Walks the extracted tree and normalises everything under it.
+    """Reads every run under the source tree.
 
     Args:
-        source (str): Directory holding ``<machine>/<save path>/*.csv``.
+        source (str): Directory holding ``<run>/results/*.csv``.
 
     Returns:
         tuple: ``(fold_rows, subject_rows, manifest_entries)``.
     """
     folds, subjects, manifest = [], [], []
-    for machine in sorted(os.listdir(source)):
-        machine_dir = os.path.join(source, machine)
-        if not os.path.isdir(machine_dir) or len(machine) != 1:
+    for campaign in sorted(os.listdir(source)):
+        results_dir = os.path.join(source, campaign, "results")
+        if not os.path.isdir(results_dir):
             continue
-        for root, _, files in os.walk(machine_dir):
-            for name in sorted(f for f in files
-                               if f.startswith("downstream_raw_results_kfold")):
-                path = os.path.join(root, name)
-                source_dir = os.path.relpath(root, machine_dir)
-                n = 0
-                for fold_row, subject_rows in read_rows(path, machine, source_dir):
-                    folds.append(fold_row)
-                    subjects.extend(subject_rows)
-                    n += 1
-                manifest.append({
-                    "machine": machine, "source_dir": source_dir, "file": name,
-                    "rows": n,
-                    "md5": hashlib.md5(open(path, "rb").read()).hexdigest(),
-                })
+        for name in sorted(f for f in os.listdir(results_dir) if is_result_file(f)):
+            path = os.path.join(results_dir, name)
+            n = 0
+            for fold_row, subject_rows in read_rows(path, campaign):
+                folds.append(fold_row)
+                subjects.extend(subject_rows)
+                n += 1
+            manifest.append({
+                "campaign": campaign, "file": name, "rows": n,
+                "md5": hashlib.md5(open(path, "rb").read()).hexdigest(),
+            })
     return folds, subjects, manifest
 
 
 def deduplicate(folds: list, subjects: list):
-    """Drops rows repeated because two machines produced the same fold.
+    """Drops rows that describe the same run of the same fold twice.
 
-    The whole-head neighbour sweep was split across machines with one fold computed on
-    both, and counting it twice would tighten the spread without adding evidence.
+    The convention should make this impossible, since a result names every dimension that
+    tells it apart. It is kept as a net: if it ever fires, two runs are writing the same
+    name and the count is what makes that visible instead of silent.
 
     Args:
         folds (list): Fold rows.
@@ -211,7 +197,7 @@ def deduplicate(folds: list, subjects: list):
     """
     def key(r):
         return (r["variant"], r["zone"], r["frequency"], r["target"],
-                r["eval_mode"], r["fold"], r["source_dir"])
+                r["eval_mode"], r["fold"])
 
     seen, kept_folds = set(), []
     for r in folds:
@@ -237,8 +223,8 @@ def keep_complete(folds: list, subjects: list, n_folds: int):
     """Drops runs that never covered every fold.
 
     A run left half done is not a weaker version of a finished one: pooling it gives a
-    figure over a fraction of the cohort that reads like the real thing. One of these hid
-    for a whole campaign, a variant that fold 0 still carried and later folds did not.
+    figure over a fraction of the cohort that reads like the real thing. While a campaign is
+    still executing, most of what is on disk is exactly that.
 
     Args:
         folds (list): Fold rows.
@@ -260,72 +246,6 @@ def keep_complete(folds: list, subjects: list, n_folds: int):
     kept_folds = [r for r in folds if group(r) not in incomplete]
     kept_subjects = [r for r in subjects if group(r) not in incomplete]
     return kept_folds, kept_subjects, incomplete
-
-
-def campaign_of(source_dir: str) -> str:
-    """Names the campaign a result directory belongs to.
-
-    A campaign wrote one directory per zone, so the zone has to come off the name or each
-    zone would look like a campaign of its own, and a rule that prefers the widest campaign
-    would have nothing to prefer.
-
-    Args:
-        source_dir (str): Directory of the file, relative to ``save``.
-
-    Returns:
-        str: Campaign name, without the zone.
-    """
-    name = source_dir.replace("save/", "").strip("/")
-    parts = name.split("/")
-    if len(parts) > 1 and parts[-1] in ZONES:
-        return "/".join(parts[:-1])
-    for zone in ZONES:
-        if name.endswith(f"_{zone}"):
-            return name[: -len(f"_{zone}")]
-    return name
-
-
-def mark_canonical(folds: list, subjects: list):
-    """Picks one provenance per run, leaving the rest available but not default.
-
-    The whole montage was covered by several campaigns, so twelve of its runs exist two to
-    four times over. They are all real, and one of the pairs is what measures the spread of
-    a re-execution, but a query that groups by method and zone without noticing would pool
-    the same subject four times and read it as a larger cohort.
-
-    The winner is the campaign that covers the most zones for that variant, because that is
-    the one a comparison across regions has to use; ties break by name so the choice is
-    stable between runs.
-
-    Args:
-        folds (list): Fold rows.
-        subjects (list): Subject rows.
-
-    Returns:
-        int: Number of runs that had more than one provenance.
-    """
-    zones_per = defaultdict(set)
-    for r in folds:
-        zones_per[(r["variant"], campaign_of(r["source_dir"]))].add(r["zone"])
-
-    provenances = defaultdict(set)
-    for r in folds:
-        provenances[(r["variant"], r["zone"], r["frequency"],
-                     r["target"], r["eval_mode"])].add(r["source_dir"])
-
-    winner = {}
-    for run, dirs in provenances.items():
-        winner[run] = max(sorted(dirs),
-                          key=lambda d: len(zones_per[(run[0], campaign_of(d))]))
-
-    def run_of(r):
-        return (r["variant"], r["zone"], r["frequency"], r["target"], r["eval_mode"])
-
-    for rows in (folds, subjects):
-        for r in rows:
-            r["campaign"] = campaign_of(r["source_dir"])
-            r["canonical"] = winner[run_of(r)] == r["source_dir"]
-    return sum(1 for dirs in provenances.values() if len(dirs) > 1)
 
 
 def write_csv(path: str, rows: list, columns: list):
@@ -364,20 +284,30 @@ def write_by_method(out_dir: str, folds: list):
 
 
 def main(args):
-    """Consolidates the extracted results and reports what was written.
+    """Consolidates the results of every run and reports what was written.
 
     Args:
         args (argparse.Namespace): Parsed command-line arguments.
     """
     folds, subjects, manifest = collect(args.source)
+    if not folds:
+        raise SystemExit(
+            f"[ERROR] No result files under {args.source}/<run>/results/. Expected names "
+            "like SimCLR-xsubj-cosine_occipital_all_age_fold0.csv."
+        )
     folds, subjects, dropped = deduplicate(folds, subjects)
     folds, subjects, incomplete = keep_complete(folds, subjects, args.n_folds)
-    multi = mark_canonical(folds, subjects)
 
     if incomplete:
         print(f"[WARN] {len(incomplete)} runs dropped for being incomplete:")
         for (variant, zone, _, target, mode), n in sorted(incomplete.items()):
             print(f"  {variant} / {zone} / {target} / {mode}: {n} of {args.n_folds} folds")
+
+    if not folds:
+        raise SystemExit(
+            f"[ERROR] Every run under {args.source} is short of {args.n_folds} folds; "
+            "nothing complete to consolidate."
+        )
 
     write_csv(os.path.join(args.out, "results_folds.csv"), folds, FOLD_COLUMNS)
     write_csv(os.path.join(args.out, "results_subjects.csv"), subjects, SUBJECT_COLUMNS)
@@ -389,11 +319,12 @@ def main(args):
     except (subprocess.CalledProcessError, FileNotFoundError):
         commit = "unknown"
 
+    campaigns = sorted({r["campaign"] for r in folds})
     with open(os.path.join(args.out, "MANIFEST.json"), "w") as fh:
-        json.dump({"repo_commit": commit, "extracted_from": args.source,
+        json.dump({"repo_commit": commit, "source": args.source,
+                   "campaigns": campaigns,
                    "fold_rows": len(folds), "subject_rows": len(subjects),
                    "duplicate_fold_rows_dropped": dropped,
-                   "runs_with_several_provenances": multi,
                    "incomplete_runs_dropped": {"/".join(g): n
                                                for g, n in sorted(incomplete.items())},
                    "files": manifest}, fh, indent=2, sort_keys=True)
@@ -402,13 +333,13 @@ def main(args):
     print(f"{len(folds)} fold rows, {len(subjects)} subject rows, "
           f"{dropped} duplicates dropped")
     print(f"{len(variants)} methods over {n_files} method/zone files")
-    print(f"{multi} runs have several provenances; use canonical=True for one of each")
+    print(f"campaigns: {', '.join(campaigns)}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=str, required=True,
-                        help="Directory holding <machine>/<save path>/*.csv.")
+    parser.add_argument("--source", type=str, default="save",
+                        help="Directory holding <run>/results/*.csv.")
     parser.add_argument("--out", type=str, default="results",
                         help="Directory to write the consolidated base to.")
     parser.add_argument("--n_folds", type=int, default=10,
