@@ -320,10 +320,9 @@ def evaluate_and_plot(
 
     # --- Regression plot ---
     os.makedirs(plot_dir, exist_ok=True)
-    if fold_id:
-        fig_name = f"{model_tag}_{fold_id}_regression_plot.png"
-    else:
-        fig_name = f"{model_tag}_regression_plot.png"
+    # model_tag already ends in the fold, so appending it again produced names like
+    # ..._fold0_fold0_regression_plot.png.
+    fig_name = f"{model_tag}.png"
     fig_path = os.path.join(plot_dir, fig_name)
 
     plt.figure(figsize=(6, 6))
@@ -463,7 +462,9 @@ def main(args):
             )
 
         fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-        model_tag = f"{args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}{fold_suffix}"
+        # The label is the variant; the method is the family. Naming by the family made the
+        # thirteen SimCLR variants write one file and overwrite each other.
+        model_tag = f"{args.label or args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}{fold_suffix}"
     
     elif args.method == "PCA":
         embedding_size = args.embedding_size
@@ -495,7 +496,7 @@ def main(args):
         model = Head(embedding_size, 1).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-        model_tag = f"PCA_{args.zone}_{args.frequency}_{args.target}{fold_suffix}"
+        model_tag = f"{args.label or 'PCA'}_{args.zone}_{args.frequency}_{args.target}_linear_probe{fold_suffix}"
 
     elif args.method == "supervised":
         print(f"\n=== Training supervised from scratch ===")
@@ -522,7 +523,7 @@ def main(args):
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay
         )
         fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-        model_tag = f"supervised_{args.zone}_{args.frequency}_{args.target}{fold_suffix}"
+        model_tag = f"{args.label or 'supervised'}_{args.zone}_{args.frequency}_{args.target}_fine_tuning{fold_suffix}"
 
     else:
         raise ValueError(f"Unrecognised method '{args.method}'.")
@@ -688,6 +689,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Fold identifier to include in output filenames."
+    )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help="Variant name used to name what this run writes. --method carries the family, "
+             "which picks the architecture; the two differ for every SimCLR and ExpCLR "
+             "variant, and naming by the family makes them overwrite each other."
     )
     parser.add_argument(
         "--embedding_stats",

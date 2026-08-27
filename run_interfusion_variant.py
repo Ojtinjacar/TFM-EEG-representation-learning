@@ -157,7 +157,7 @@ def pretrain_fold(args, fold_id, test_subjects, seed, model_dir):
         "--data-path", win_path,
         "--meta-path", meta_path,
         "--save-model-dir", model_dir,
-        "--save-fig-dir", os.path.join("save", "figures", f"pretrain_{args.tag}"),
+        "--save-fig-dir", os.path.join(rd.run_dirs(args.run_name)["figures"], "pretrain"),
         "--z-dim", str(args.z_dim),
         "--rnn-hidden", str(args.rnn_hidden),
         "--dense-hidden", str(args.dense_hidden),
@@ -221,15 +221,18 @@ def evaluate_fold(args, fold_idx, fold_id, test_subjects, model_path, seed, meth
         rows.append({
             "fold": fold_idx,
             "method": method_label,
+            # The zone and the band belong in the row. Leaving them to the directory
+            # is what made a result depend on where somebody chose to put it.
+            "zone": args.zone,
+            "frequency": args.frequency,
             "eval_mode": eval_mode,
             "target": args.target,
             "nRMSE": np.nan if nrmse is None else nrmse,
             "R2": np.nan if r2 is None else r2,
             "RMSE": np.nan if rmse is None else rmse,
-            # Same serialization as run_downstream.py: the aggregation scripts
-            # parse this column positionally, not as a Python literal. There is
-            # no session_avgs column here because parse_output does not emit one.
-            "subject_avgs": ";".join(f"{yt},{yp}" for yt, yp in subject_avgs),
+            # Left as pairs: write_fold_results serializes them the one way the
+            # aggregation scripts parse, so it is not repeated here.
+            "subject_avgs": subject_avgs,
         })
         print(f"    OK nRMSE={rows[-1]['nRMSE']:.4f}, R2={rows[-1]['R2']:.4f}, "
               f"RMSE={rows[-1]['RMSE']:.2f}", flush=True)
@@ -250,25 +253,24 @@ def main(args):
             print(f"fold{fold_idx}: {' '.join(test_subjects)}")
         return
 
-    model_dir = args.model_dir or os.path.join("save", f"models_{args.tag}")
-    save_dir = args.save_dir or os.path.join("save", args.tag)
+    # The run owns its directories, exactly as in run_downstream.py. Passing them by hand is
+    # what let one zone's results sit in a folder named after another.
+    dirs = rd.run_dirs(args.run_name)
+    model_dir, save_dir = dirs["models"], dirs["results"]
     method_label = f"InterFusion-{args.tag}"
-    os.makedirs(model_dir, exist_ok=True)
-    os.makedirs(save_dir, exist_ok=True)
 
     start, end = args.fold_range if args.fold_range else (0, args.n_folds)
     for fold_idx, _, test_subjects in folds[start:end]:
         fold_id = f"fold{fold_idx}"
-        csv_path = os.path.join(
-            save_dir, f"downstream_raw_results_kfold_folds{fold_idx}-{fold_idx}.csv"
-        )
-        if os.path.exists(csv_path) and not args.no_skip:
-            print(f"[SKIP] {fold_id}: {csv_path} already exists.", flush=True)
+        if not args.no_skip and rd.fold_is_done(save_dir, [method_label], args.zone,
+                                                args.frequency, [args.target], fold_idx,
+                                                args.eval_modes):
+            print(f"[SKIP] {fold_id}: {args.zone} already complete.", flush=True)
             continue
 
         seed = args.base_seed + fold_idx
-        print(f"\n{'='*80}\n{method_label} | {fold_id} | test={test_subjects}\n{'='*80}",
-              flush=True)
+        print(f"\n{'='*80}\n{method_label} | {args.zone} | {fold_id} | test={test_subjects}\n"
+              f"{'='*80}", flush=True)
 
         model_path = pretrain_fold(args, fold_id, test_subjects, seed, model_dir)
         rows = evaluate_fold(
@@ -278,8 +280,8 @@ def main(args):
             print(f"[ERROR] {fold_id}: no results, CSV not written.", flush=True)
             continue
 
-        pd.DataFrame(rows).to_csv(csv_path, index=False)
-        print(f"[INFO] Results saved to: {csv_path}", flush=True)
+        for path in rd.write_fold_results(rows, save_dir):
+            print(f"[INFO] Results saved to: {path}", flush=True)
 
 
 def parse_args():
@@ -328,10 +330,9 @@ def parse_args():
                         help="Seed shared with the main protocol.")
     parser.add_argument("--fold_range", type=int, nargs=2, default=None,
                         metavar=("START", "END"), help="Half-open fold range.")
-    parser.add_argument("--model_dir", type=str, default=None,
-                        help="Checkpoint directory (default: save/models_<tag>).")
-    parser.add_argument("--save_dir", type=str, default=None,
-                        help="Results directory (default: save/<tag>).")
+    parser.add_argument("--run_name", type=str, required=True,
+                        help="Name of the run. Every directory it writes into is derived "
+                             "from it, so a launch cannot invent its own layout.")
     parser.add_argument("--no_skip", action="store_true",
                         help="Recompute even if checkpoints or CSVs exist.")
     parser.add_argument("--print_folds", action="store_true",
