@@ -315,6 +315,9 @@ def main(args):
     plt.tight_layout()
 
     fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+    # Every other trainer makes this directory; this one did not, so a missing plot
+    # directory threw away a fully trained encoder at the very last line.
+    os.makedirs(args.plot_dir, exist_ok=True)
     plot_path = os.path.join(args.plot_dir, f"SimCLR_{args.zone}_{args.frequency}{fold_suffix}_training_loss_curve.png")
     plt.savefig(plot_path)
     print(f"Loss curve saved to {plot_path}")

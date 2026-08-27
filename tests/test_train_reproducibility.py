@@ -76,7 +76,10 @@ def _train(tiny_dataset, seed, save_dir, fold_id, diagnose_every=5):
            "--fold_id", fold_id, "--num_epochs", "2", "--batch_size", "32",
            "--embedding_size", "16", "--seed", str(seed),
            "--diagnose_every", str(diagnose_every),
-           "--save_dir", str(save_dir)]
+           # Both directories, not just the checkpoint one: given only --save_dir the loss
+           # curve falls back to its default and the test writes into the repository's own
+           # save/, which is the same escape the orchestrator used to have.
+           "--save_dir", str(save_dir), "--plot_dir", str(save_dir)]
     res = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
     assert res.returncode == 0, res.stderr[-3000:]
     ckpts = list(save_dir.glob("*.pth"))

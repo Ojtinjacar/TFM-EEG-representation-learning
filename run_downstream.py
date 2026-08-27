@@ -26,6 +26,233 @@ from build_expert_features import descriptor_path, descriptors_for, rois_of_zone
 from train_vae import BETA_CONVENTION
 from montage import MONTAGE_SIDECAR, load_channel_names, resolve_processed_montage
 
+# Where a run puts what it produces. The directory is derived from the run's name and never
+# given as a free argument: a path chosen per launch is a path nobody can predict, and the
+# zone of a result ends up living in it instead of in the result.
+RUN_SUBDIRS = ("results", "models", "heads", "figures", "logs")
+
+# Where the pre-training checkpoints of every run used to land, whatever run wrote them. Kept
+# as a read-only fallback so a machine whose weights have not been moved into their run yet is
+# not made to retrain them; nothing is ever written here any more.
+LEGACY_MODEL_DIR = "save/models"
+
+# The trainers disagree on what these two arguments are called, and that disagreement is why
+# the orchestrator ended up passing neither: every checkpoint and every loss curve went to the
+# defaults, outside the run that produced them. Translating once here keeps the call sites
+# from having to know which spelling each script happens to use.
+_SNAKE_FLAGS = ("--save_dir", "--plot_dir")
+_KEBAB_FLAGS = ("--save-model-dir", "--save-fig-dir")
+OUTPUT_FLAGS = {
+    "SimCLR": _SNAKE_FLAGS,
+    "ExpCLR": _SNAKE_FLAGS,
+    "TripletLoss": _SNAKE_FLAGS,
+    "VAE": _KEBAB_FLAGS,
+    "AE": _KEBAB_FLAGS,
+    "MAE": _KEBAB_FLAGS,
+    "InterFusion": _KEBAB_FLAGS,
+}
+
+
+def output_flags(method):
+    """Returns the flags a trainer takes for its checkpoint and figure directories.
+
+    Args:
+        method (str): Pre-training method, or one of its variants.
+
+    Returns:
+        tuple: Checkpoint-directory flag and figure-directory flag.
+
+    Raises:
+        KeyError: If the method has no known pair of flags.
+    """
+    family = family_of(method)
+    return OUTPUT_FLAGS[family]
+
+
+def run_dirs(run_name, base="save"):
+    """Returns the directories of a run, creating them.
+
+    Args:
+        run_name (str): Name of the run, one per method campaign.
+        base (str): Root the runs hang from.
+
+    Returns:
+        dict: Subdirectory name to path.
+
+    Raises:
+        ValueError: If the name would escape the root or is empty.
+    """
+    if not run_name or os.path.isabs(run_name) or ".." in run_name.split(os.sep):
+        raise ValueError(f"run_name must be a plain name under {base}/, got {run_name!r}")
+    made = {}
+    for sub in RUN_SUBDIRS:
+        path = os.path.join(base, run_name, sub)
+        os.makedirs(path, exist_ok=True)
+        made[sub] = path
+    return made
+
+
+def expected_variants(args):
+    """Returns the variants a given invocation is supposed to produce.
+
+    Args:
+        args (argparse.Namespace): Parsed arguments.
+
+    Returns:
+        list: Variant names.
+    """
+    selected = set(args.methods) if getattr(args, "methods", None) else None
+
+    def use(m):
+        return selected is None or m in selected
+
+    out = []
+    for method in dict.fromkeys(LINEAR_PROBE_METHODS + FINE_TUNING_METHODS):
+        if not use(method):
+            continue
+        if method == "SimCLR":
+            out.extend(getattr(args, "simclr_variants", None) or ["SimCLR"])
+        elif method == "ExpCLR":
+            out.extend(getattr(args, "expclr_variants", None) or ["ExpCLR"])
+        else:
+            out.append(method)
+    return list(dict.fromkeys(out))
+
+
+def family_of(variant):
+    """Returns the method family a variant belongs to.
+
+    Args:
+        variant (str): Variant name.
+
+    Returns:
+        str: Family, which is what decides architecture and applicable modes.
+    """
+    if variant in SIMCLR_VARIANT_NAMES:
+        return "SimCLR"
+    if variant in EXPCLR_VARIANT_NAMES:
+        return "ExpCLR"
+    # The InterFusion runner labels its results InterFusion-<tag> so two configurations can
+    # be told apart. Without this the label belongs to no family, which reads as a method
+    # with no evaluation modes and makes the resume check pass every fold untouched.
+    if variant.startswith("InterFusion-"):
+        return "InterFusion"
+    return variant
+
+
+def modes_of(variant):
+    """Returns the evaluation modes a variant can produce.
+
+    Not every method has both: ``PCA`` has no encoder to fine-tune and ``supervised`` has
+    nothing to probe frozen. Expecting a fixed row count per fold is therefore wrong, and
+    was what made the hand-written guards fragile.
+
+    Args:
+        variant (str): Variant name.
+
+    Returns:
+        list: Subset of ``linear_probe`` and ``fine_tuning``.
+    """
+    family = family_of(variant)
+    modes = []
+    if family in LINEAR_PROBE_METHODS:
+        modes.append("linear_probe")
+    if family in FINE_TUNING_METHODS:
+        modes.append("fine_tuning")
+    return modes
+
+
+def write_fold_results(results, results_dir):
+    """Writes the rows of one fold, one file per variant, as soon as it closes.
+
+    Accumulating every fold in memory and dumping at the end means a run that dies at the
+    seventh fold loses the six before it. Writing here is what makes a preemption cost the
+    fold in progress and nothing else.
+
+    Args:
+        results (list): Rows produced by one fold.
+        results_dir (str): Directory to write into.
+
+    Returns:
+        list: Paths written.
+    """
+    by_file = {}
+    for row in results:
+        name = result_filename(row["method"], row["zone"], row["frequency"],
+                               row["target"], row["fold"])
+        by_file.setdefault(name, []).append(row)
+
+    written = []
+    for name, rows in sorted(by_file.items()):
+        frame = pd.DataFrame([{
+            "fold": r["fold"], "method": r["method"], "zone": r["zone"],
+            "frequency": r["frequency"], "eval_mode": r["eval_mode"], "target": r["target"],
+            "nRMSE": r["nRMSE"], "R2": r["R2"], "RMSE": r["RMSE"],
+            "subject_avgs": ";".join(f"{yt},{yp}" for yt, yp in r["subject_avgs"]),
+        } for r in sorted(rows, key=lambda r: r["eval_mode"])])
+        path = os.path.join(results_dir, name)
+        frame.to_csv(path, index=False)
+        written.append(path)
+    return written
+
+
+def fold_is_done(results_dir, variants, zone, frequency, targets, fold_idx, eval_modes):
+    """Says whether a fold has already produced everything this run expects of it.
+
+    Counting rows is not enough: a fold written by an earlier launch with fewer variants
+    has a plausible count and is missing methods, and skipping it would leave a hole that
+    only shows up at the aggregation, long after the machines are gone.
+
+    Args:
+        results_dir (str): Directory the run writes into.
+        variants (list): Variants this run produces.
+        zone (str): Head zone.
+        frequency (str): Frequency band.
+        targets (list): Regression targets.
+        fold_idx (int): Fold index.
+        eval_modes (list): Evaluation modes requested.
+
+    Returns:
+        bool: True if every expected file is present and complete.
+    """
+    for variant in variants:
+        expected_modes = [m for m in eval_modes if m in modes_of(variant)]
+        if not expected_modes:
+            continue
+        for target in targets:
+            path = os.path.join(results_dir,
+                                result_filename(variant, zone, frequency, target, fold_idx))
+            if not os.path.exists(path):
+                return False
+            try:
+                found = set(pd.read_csv(path)["eval_mode"])
+            except (OSError, KeyError, pd.errors.EmptyDataError):
+                return False
+            if not set(expected_modes).issubset(found):
+                return False
+    return True
+
+
+def result_filename(variant, zone, frequency, target, fold_idx):
+    """Returns the result filename of one run of one variant.
+
+    Every dimension that tells two runs apart is in the name, so a launch cannot lose a
+    result by writing it where another one already wrote, whichever way the work was split
+    across machines.
+
+    Args:
+        variant (str): Method variant, e.g. ``SimCLR-xsubj-cosine``.
+        zone (str): Head zone.
+        frequency (str): Frequency band.
+        target (str): Regression target.
+        fold_idx (int): Fold index.
+
+    Returns:
+        str: Filename, without directory.
+    """
+    return f"{variant}_{zone}_{frequency}_{target}_fold{fold_idx}.csv"
+
+
 # Configuration of experiments
 # Methods to run for each evaluation mode
 LINEAR_PROBE_METHODS = ["PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE", "InterFusion",
@@ -306,19 +533,34 @@ def config_data_paths(zone, frequency):
 
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False,
                     allow_legacy=False, seed=42, simclr_flags=None, simclr_tag="",
-                    vae_beta=1.0, vae_free_bits=0.0):
-    """
-    Constructs and runs a single call to pretraining script, excluding test subjects.
-    Returns the path to the trained model.
+                    vae_beta=1.0, vae_free_bits=0.0, model_dir=None, plot_dir=None):
+    """Trains one encoder for one fold, or reuses the one already trained for it.
+
+    The checkpoint and the loss curve belong to the run that asked for them, so both
+    directories are passed down to the trainer instead of letting it fall back to a shared
+    default. An existing checkpoint is reused only when its sidecar matches the configuration
+    about to be trained.
 
     Args:
-        method: Pre-training method (SimCLR, AE, TripletLoss)
-        target: Target for TripletLoss (ignored for SimCLR and AE)
-        zone: Brain zone
-        frequency: Frequency band
-        test_subjects: List of subjects to exclude
-        fold_id: Unique fold identifier for naming the model
-        no_skip: If True, forces retraining even if the model exists
+        method (str): Pre-training method, or one of its variants.
+        target (str): Regression target; only ``TripletLoss`` conditions on it.
+        zone (str): Head zone.
+        frequency (str): Frequency band.
+        test_subjects (list): Subjects held out of pre-training.
+        fold_id (str): Fold identifier, part of the checkpoint name.
+        no_skip (bool): Retrain even if a reusable checkpoint exists.
+        allow_legacy (bool): Accept checkpoints whose sidecar was backfilled.
+        seed (int): Seed handed to the trainer.
+        simclr_flags (list): Extra flags selecting a SimCLR variant.
+        simclr_tag (str): Variant tag folded into the fold id.
+        vae_beta (float): Beta of the VAE objective.
+        vae_free_bits (float): Free-bits floor of the VAE objective.
+        model_dir (str): Directory this run keeps its checkpoints in.
+        plot_dir (str): Directory this run keeps its pre-training curves in.
+
+    Returns:
+        str | None: Path of the checkpoint, or None if the method needs no pre-training
+        or the trainer produced nothing.
     """
     simclr_flags = list(simclr_flags or [])
     if method in ["PCA", "supervised"]:
@@ -435,12 +677,18 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"[WARNING] Pretraining not implemented for method: {method}")
         return None
 
-    model_path = os.path.join("save/models", model_filename)
+    model_dir = model_dir or LEGACY_MODEL_DIR
+    model_path = os.path.join(model_dir, model_filename)
 
-    # Reuse only a checkpoint whose sidecar matches the intended configuration
-    if not no_skip and checkpoint_is_reusable(model_path, expected, allow_legacy=allow_legacy):
-        print(f"  > Reusable model found: {model_filename}. Skipping pretraining.")
-        return model_path
+    # Reuse only a checkpoint whose sidecar matches the intended configuration. The legacy
+    # directory is searched too, so weights trained before the layout existed still count as
+    # done: a campaign that has to retrain what it already has costs days of GPU.
+    for candidate in (model_path, os.path.join(LEGACY_MODEL_DIR, model_filename)):
+        if no_skip:
+            break
+        if checkpoint_is_reusable(candidate, expected, allow_legacy=allow_legacy):
+            print(f"  > Reusable model found: {candidate}. Skipping pretraining.")
+            return candidate
 
     # Build command based on the method
     if method == "SimCLR":
@@ -529,6 +777,13 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
     if method == "VAE":
         command += ["--beta", str(vae_beta), "--free-bits", str(vae_free_bits)]
 
+    # Both directories belong to the run, and the trainers spell these two flags in two
+    # different ways; output_flags is what keeps that from leaking up here.
+    model_flag, fig_flag = output_flags(method)
+    command += [model_flag, model_dir]
+    if plot_dir:
+        command += [fig_flag, plot_dir]
+
     command += ["--seed", str(seed)]
 
     print(f"  > Running pretraining command: {' '.join(command)}")
@@ -543,7 +798,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"  > Pretraining completed successfully")
 
         # The model was already saved with the correct name including fold_id
-        model_path = os.path.join("save/models", model_filename)
+        model_path = os.path.join(model_dir, model_filename)
 
         if os.path.exists(model_path):
             print(f"  > Model saved as: {model_filename}")
@@ -558,12 +813,17 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"STDERR: {e.stderr}")
         return None
 
-def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None, embedding_stats=None):
+def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_path, seed, test_subjects, fold_id=None, downstream_method=None, embedding_stats=None, plot_dir=None, head_dir=None):
     """
     Constructs and runs a single call to downstream.py.
 
     ``embedding_stats`` only reaches InterFusion, whose readout width depends on it;
     left as None the evaluated model keeps its default mode.
+
+    ``--label`` carries the variant while ``--method`` carries the family. They are not the
+    same thing: the family picks the architecture, the variant names what is written. Sending
+    only the family made the thirteen SimCLR variants share one figure name and overwrite each
+    other, which is why only one in thirteen survived.
 
     Returns: (nrmse, r2, rmse, subject_avgs)
     """
@@ -571,6 +831,7 @@ def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_
     command = [
         "python", "src/downstream.py",
         "--method", downstream_method or method,
+        "--label", method,
         "--target", target,
         "--eval_mode", eval_mode,
         "--zone", zone,
@@ -579,6 +840,11 @@ def run_downstream_experiment(method, eval_mode, target, zone, frequency, model_
         "--data_path", win_path,
         "--meta_path", meta_path,
     ]
+
+    if plot_dir:
+        command.extend(["--plot_dir", plot_dir])
+    if head_dir:
+        command.extend(["--save_dir", head_dir])
 
     # PCA/supervised have model_path=None
     if model_path is not None:
@@ -659,6 +925,12 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
     pretrained_models = {}
     pretrain_seed = args.base_seed + fold_idx
 
+    # The encoders and their loss curves belong to this run. Both are kept apart from the
+    # downstream figures, which are a different kind of output of a different stage.
+    model_dir = getattr(args, "model_dir", None) or LEGACY_MODEL_DIR
+    run_plot_dir = getattr(args, "plot_dir", None)
+    pretrain_plot_dir = os.path.join(run_plot_dir, "pretrain") if run_plot_dir else None
+
     # ========================================================================
     # PHASE 1: PRE-TRAINING (considering dependencies)
     # ========================================================================
@@ -677,6 +949,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             test_subjects=test_subjects,
             fold_id=fold_id,
             no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir,
             simclr_flags=spec["flags"], simclr_tag=spec["tag"],
         )
 
@@ -690,7 +963,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             frequency=args.frequency,
             test_subjects=test_subjects,
             fold_id=fold_id,
-            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir
         )
     else:
         pretrained_models["AE"] = None
@@ -705,7 +979,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             frequency=args.frequency,
             test_subjects=test_subjects,
             fold_id=fold_id,
-            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir
         )
     else:
         pretrained_models["MAE"] = None
@@ -721,6 +996,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             test_subjects=test_subjects,
             fold_id=fold_id,
             no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir,
             vae_beta=args.vae_beta, vae_free_bits=args.vae_free_bits,
         )
     else:
@@ -737,6 +1013,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             test_subjects=test_subjects,
             fold_id=fold_id,
             no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir,
         )
     else:
         pretrained_models["InterFusion"] = None
@@ -755,6 +1032,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             test_subjects=test_subjects,
             fold_id=fold_id,
             no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir,
         )
 
     # 1.6 Pre-train TripletLoss for each target (depends on target)
@@ -779,7 +1057,8 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             frequency=args.frequency,
             test_subjects=valid_test_subjects,
             fold_id=fold_id,
-            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed
+            no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
+            model_dir=model_dir, plot_dir=pretrain_plot_dir
         )
         pretrained_models[f"TripletLoss_{target}"] = triplet_model
 
@@ -850,12 +1129,19 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     test_subjects=valid_test_subjects,
                     fold_id=fold_id,
                     downstream_method=downstream_method,
+                    plot_dir=getattr(args, "plot_dir", None),
+                    head_dir=getattr(args, "head_dir", None),
                 )
 
                 if nrmse is not None and r2 is not None and rmse is not None:
                     result_entry = {
                         "fold": fold_idx,
                         "method": method,
+                        # Without these the zone lives only in whatever directory the
+                        # launch chose, so two zones written to one directory mix without
+                        # a trace and every reader has to guess from the path.
+                        "zone": args.zone,
+                        "frequency": args.frequency,
                         "eval_mode": eval_mode,
                         "target": target,
                         "nRMSE": nrmse,
@@ -983,6 +1269,13 @@ def main(args):
             # Adjust fold_idx if processing a range
             actual_fold_idx = fold_idx + (args.fold_range[0] if args.fold_range else 0)
 
+            if args.results_dir and not args.no_skip and fold_is_done(
+                    args.results_dir, expected_variants(args), args.zone, args.frequency,
+                    targets, actual_fold_idx, args.eval_modes):
+                print(f"\n[SKIP] Fold {actual_fold_idx} already has every expected result.",
+                      flush=True)
+                continue
+
             train_subjects = [unique_subjects[i] for i in train_idx]
             test_subjects = [unique_subjects[i] for i in test_idx]
 
@@ -995,6 +1288,12 @@ def main(args):
                 eval_modes=args.eval_modes,
                 target_subject_dict=target_subject_dict
             )
+
+            # Written here and not at the end: a run that dies mid-campaign keeps every
+            # fold it had already closed.
+            if args.results_dir and fold_results:
+                for path in write_fold_results(fold_results, args.results_dir):
+                    print(f"[INFO] Fold result saved to: {path}", flush=True)
 
             all_results.extend(fold_results)
 
@@ -1054,8 +1353,14 @@ def main(args):
         raise ValueError(f"Invalid cv_strategy: {args.cv_strategy}")
 
     if not all_results:
-        print("\n[ERROR] No results were collected. Exiting.")
-        return
+        # Returning here would exit 0, and a chained launch would carry on as if the fold
+        # had produced its rows. Every guard written around this pipeline existed to catch
+        # exactly that; the pipeline should say it itself.
+        raise SystemExit(
+            "[ERROR] No results were collected: every method was skipped or failed. "
+            "Look for '[SKIP] Pre-trained model not available' or a pre-training traceback "
+            "above."
+        )
 
     # ========================================================================
     # AGGREGATION AND SAVING OF RESULTS
@@ -1186,8 +1491,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--zone",
         type=str,
-        default="all",
-        help="Head zone data (all, frontal, etc.)"
+        nargs="+",
+        default=["all"],
+        help="Head zones to run, one after another. Several of them make a sweep a single "
+             "invocation instead of a loop written outside the pipeline."
     )
     parser.add_argument(
         "--frequency",
@@ -1202,10 +1509,18 @@ if __name__ == "__main__":
         help="Path to metadata CSV file. If omitted, uses data/processed/{zone}_{frequency}/."
     )
     parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Name of the run. Everything it produces hangs from save/<run_name>/ in "
+             "results, models, heads, figures and logs, so the layout is derived and not "
+             "invented per launch. Without it the legacy --save_dir is used."
+    )
+    parser.add_argument(
         "--save_dir",
         type=str,
         default="save/downstream_results",
-        help="Directory to save the final CSV and plot."
+        help="Legacy output directory, kept for the older entry points. Prefer --run_name."
     )
     parser.add_argument(
         "--base_seed",
@@ -1303,4 +1618,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.expclr_config:
         load_expclr_tuning(args.expclr_config)
-    main(args)
+
+    # The run's name decides where everything lands. Without it the older behaviour stands,
+    # so the entry points that predate this keep working.
+    if args.run_name:
+        dirs = run_dirs(args.run_name)
+        args.results_dir = dirs["results"]
+        args.save_dir = dirs["results"]
+        args.model_dir = dirs["models"]
+        args.head_dir = dirs["heads"]
+        args.plot_dir = dirs["figures"]
+        args.log_dir = dirs["logs"]
+        print(f"[INFO] Run '{args.run_name}' writes to save/{args.run_name}/")
+    else:
+        args.results_dir = None
+        for attr in ("model_dir", "head_dir", "plot_dir", "log_dir"):
+            setattr(args, attr, getattr(args, attr, None))
+
+    # One zone at a time, in one invocation. main() sets up per zone, so the loop belongs
+    # here rather than inside it; what matters is that the caller writes one line.
+    zones = args.zone if isinstance(args.zone, list) else [args.zone]
+    for i, zone in enumerate(zones):
+        args.zone = zone
+        if len(zones) > 1:
+            print(f"\n{'#' * 80}\n# ZONE {i + 1}/{len(zones)}: {zone}\n{'#' * 80}",
+                  flush=True)
+        main(args)
