@@ -9,7 +9,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from run_e3_loso import EmbeddingCache, build_encoder
+from run_expclr_folds import EmbeddingCache, build_encoder
 
 from eval_expclr import extract_embeddings
 

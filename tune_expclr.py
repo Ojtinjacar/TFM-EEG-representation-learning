@@ -259,7 +259,7 @@ def main() -> None:
                "validation_subjects": val_subjects, "epochs": args.epochs, "seed": args.seed},
               open(config_path, "w"), indent=2)
     print(f"\nGuardado en {config_path}. Lanzar despues:")
-    print(f"  python -u run_e3_loso.py --epochs 50 --config {config_path}")
+    print(f"  python -u run_expclr_folds.py --epochs 50 --config {config_path}")
     print(f"  or, for the comparable table: run_downstream.py --expclr_config {OUT}")
 
 

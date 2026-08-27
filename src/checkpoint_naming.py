@@ -1,7 +1,7 @@
 """Single source of truth for pretraining checkpoint names and sidecar metadata.
 
 Every train script builds its checkpoint filename through the functions below,
-and the orchestrators (run_downstream.py, run_pipeline.py, run_e3_loso.py)
+and the orchestrators (run_downstream.py, run_pipeline.py, run_expclr_folds.py)
 resolve the expected filename through the same functions, so the two sides can
 never drift apart.
 

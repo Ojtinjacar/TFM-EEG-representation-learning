@@ -79,10 +79,10 @@ def test_the_tuner_names_its_checkpoints_like_everyone_else():
 def test_the_gate_keys_of_the_three_orchestrators_agree():
     """The same configuration must produce the same expectations everywhere."""
     import run_downstream
-    import run_e3_loso
+    import run_expclr_folds
     import tune_expclr
 
-    assert run_downstream.EXPCLR_DESCRIPTOR == run_e3_loso.DESCRIPTOR
+    assert run_downstream.EXPCLR_DESCRIPTOR == run_expclr_folds.DESCRIPTOR
     assert run_downstream.EXPCLR_DESCRIPTOR == tune_expclr.DEFAULT_DESCRIPTOR
 
 
@@ -204,7 +204,7 @@ def test_the_descriptor_declared_must_match_the_file():
 
 
 def test_gaps_are_filled_from_the_training_split_only():
-    from run_e3_loso import impute_with_train_medians
+    from run_expclr_folds import impute_with_train_medians
 
     features = np.array([[1.0, 10.0], [3.0, 30.0], [np.nan, np.nan], [100.0, 1000.0]])
     train = np.array([True, True, True, False])
@@ -217,7 +217,7 @@ def test_gaps_are_filled_from_the_training_split_only():
 
 
 def test_a_column_missing_throughout_training_is_refused():
-    from run_e3_loso import impute_with_train_medians
+    from run_expclr_folds import impute_with_train_medians
 
     features = np.array([[np.nan, 1.0], [np.nan, 2.0], [5.0, 3.0]])
     train = np.array([True, True, False])
