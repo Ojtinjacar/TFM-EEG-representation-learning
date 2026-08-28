@@ -23,8 +23,29 @@ import run_downstream as rd  # noqa: E402
 def test_a_run_that_collects_nothing_fails_loudly():
     """Exiting 0 with no results let a chained launch carry on as if the fold had worked."""
     source = open(os.path.join(ROOT, "run_downstream.py")).read()
-    block = source[source.index("    if not all_results:"):][:400]
+    block = source[source.index("    if not all_results:"):][:1200]
     assert "raise SystemExit" in block, "an empty run must not return normally"
+
+
+def test_a_zone_already_complete_is_a_resume_and_not_a_failure():
+    """A preempted machine is relaunched with the same command it had. Treating a zone whose
+    folds are all on disk as an error aborted the sweep on its first finished zone, so the
+    relaunch had to be edited by hand to name only what was missing -- which is exactly the
+    kind of per-launch improvisation the layout exists to remove.
+    """
+    source = open(os.path.join(ROOT, "run_downstream.py")).read()
+    block = source[source.index("    if not all_results:"):][:1200]
+    assert "skipped_folds == planned_folds" in block
+    # The clean exit has to come first: reaching SystemExit would abort the remaining zones.
+    assert block.index("return") < block.index("raise SystemExit")
+
+
+def test_the_skip_counter_is_defined_whichever_branch_runs():
+    """It is read after the cross-validation branches, and only the k-fold one can skip."""
+    source = open(os.path.join(ROOT, "run_downstream.py")).read()
+    setup = source.index("    skipped_folds, planned_folds = 0, 0")
+    assert setup < source.index('    if args.cv_strategy == "kfold":')
+    assert setup < source.index('    elif args.cv_strategy == "leave_one_out":')
 
 
 def test_the_result_name_carries_every_dimension_that_tells_runs_apart():

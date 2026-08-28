@@ -1275,6 +1275,11 @@ def main(args):
     if fold_ranges_dict:
         print(f"Fold ranges per target: {fold_ranges_dict}", flush=True)
 
+    # Folds found already complete on disk, and folds this invocation was asked for. Only
+    # the k-fold path can skip, but both are defined here so the check at the end never
+    # depends on which branch ran.
+    skipped_folds, planned_folds = 0, 0
+
     # Configure cross-validation
     if args.cv_strategy == "kfold":
         # K-Fold uses the union of all subjects
@@ -1292,6 +1297,7 @@ def main(args):
 
         # Run each fold
         all_results = []
+        planned_folds = len(cv_splits)
         for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
             # Adjust fold_idx if processing a range
             actual_fold_idx = fold_idx + (args.fold_range[0] if args.fold_range else 0)
@@ -1301,6 +1307,7 @@ def main(args):
                     targets, actual_fold_idx, args.eval_modes):
                 print(f"\n[SKIP] Fold {actual_fold_idx} already has every expected result.",
                       flush=True)
+                skipped_folds += 1
                 continue
 
             train_subjects = [unique_subjects[i] for i in train_idx]
@@ -1380,6 +1387,15 @@ def main(args):
         raise ValueError(f"Invalid cv_strategy: {args.cv_strategy}")
 
     if not all_results:
+        # A zone whose folds were every one of them already on disk is a resume that found
+        # nothing left to do, which is the normal way a preempted run comes back. Treating it
+        # as a failure aborted the whole sweep on its first finished zone, so a machine that
+        # lost its process could not simply be relaunched with the same command.
+        if skipped_folds and skipped_folds == planned_folds:
+            print(f"\n[DONE] Zone {args.zone!r}: its {skipped_folds} folds were already "
+                  "complete, nothing left to compute.", flush=True)
+            return
+
         # Returning here would exit 0, and a chained launch would carry on as if the fold
         # had produced its rows. Every guard written around this pipeline existed to catch
         # exactly that; the pipeline should say it itself.
