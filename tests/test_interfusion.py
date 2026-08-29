@@ -236,12 +236,24 @@ def test_pretrain_shares_conv_deconv_with_main(model):
 
 def test_interfusion_name_contract():
     assert interfusion_checkpoint_name("all", "all", "fold0") == (
-        "InterFusion_all_all_fold0_m4_w40_e20.pth"
+        "InterFusion_all_all_fold0_m4_r128_d128_w40_e20.pth"
     )
-    assert interfusion_checkpoint_name("all", "all", None, z_dim=3,
-                                       w_prime=25, epochs=5) == (
-        "InterFusion_all_all_m3_w25_e5.pth"
+    assert interfusion_checkpoint_name("all", "all", None, z_dim=3, rnn_hidden=64,
+                                       dense_hidden=32, w_prime=25, epochs=5) == (
+        "InterFusion_all_all_m3_r64_d32_w25_e5.pth"
     )
+
+
+def test_two_widths_do_not_share_a_checkpoint():
+    """The widths change what the weights are. Left out of the name, a run at 128 and one at
+    500 wrote the same file and the second replaced the first: the sidecar refuses to reuse a
+    checkpoint whose configuration does not match, but nothing stopped it being overwritten.
+    """
+    narrow = interfusion_checkpoint_name("all", "all", "fold0", rnn_hidden=128,
+                                         dense_hidden=128)
+    wide = interfusion_checkpoint_name("all", "all", "fold0", rnn_hidden=500,
+                                       dense_hidden=500)
+    assert narrow != wide
 
 
 # ---------------------------------------------------------------------------

@@ -209,7 +209,9 @@ def main():
 
     model_name = interfusion_checkpoint_name(
         args.zone, args.frequency, args.fold_id,
-        z_dim=args.z_dim, w_prime=model.w_prime, epochs=args.epochs,
+        z_dim=args.z_dim, rnn_hidden=args.rnn_hidden,
+        dense_hidden=args.dense_hidden,
+        w_prime=model.w_prime, epochs=args.epochs,
     )[:-len(".pth")]
 
     # Stage 1: z2-only VAE; shares conv/deconv/z2 heads with the main model.

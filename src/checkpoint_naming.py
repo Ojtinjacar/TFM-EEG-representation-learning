@@ -89,14 +89,22 @@ def vae_checkpoint_name(tag, zone, frequency, fold_id, beta, prior, free_bits,
 
 
 def interfusion_checkpoint_name(zone, frequency, fold_id, z_dim=4,
+                                rnn_hidden=128, dense_hidden=128,
                                 w_prime=40, epochs=20):
     """Returns the InterFusion checkpoint filename.
+
+    The recurrent and dense widths are in the name because they change what the weights
+    are. Without them a run at 128 and one at 500 wrote the same file and the second
+    silently replaced the first: the sidecar refuses to *reuse* a checkpoint whose
+    configuration does not match, but nothing stopped it from being *overwritten*.
 
     Args:
         zone (str): Head zone of the processed data.
         frequency (str): Frequency band of the processed data.
         fold_id (str | None): Fold identifier.
         z_dim (int): Inter-metric latent width M'.
+        rnn_hidden (int): Hidden units of the backward GRU.
+        dense_hidden (int): Hidden units of the dense stack.
         w_prime (int): Compressed window length W' of the temporal latent.
         epochs (int): Main-stage training epochs.
 
@@ -104,7 +112,7 @@ def interfusion_checkpoint_name(zone, frequency, fold_id, z_dim=4,
         str: Checkpoint filename (no directory).
     """
     return (f"InterFusion_{zone}_{frequency}{_fold_suffix(fold_id)}"
-            f"_m{z_dim}_w{w_prime}_e{epochs}.pth")
+            f"_m{z_dim}_r{rnn_hidden}_d{dense_hidden}_w{w_prime}_e{epochs}.pth")
 
 
 def expclr_checkpoint_name(zone, frequency, fold_id, descriptor, batch_size,

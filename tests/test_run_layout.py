@@ -188,18 +188,48 @@ def test_an_interfusion_label_belongs_to_the_interfusion_family():
     assert rd.modes_of("InterFusion") == ["linear_probe", "fine_tuning"]
 
 
-def test_interfusion_writes_through_the_shared_convention():
-    """Its results used to be named after the fold range alone, so the zone lived in a
-    directory somebody picked by hand rather than in the result."""
-    source = open(os.path.join(ROOT, "run_interfusion.py")).read()
-    assert "downstream_raw_results_kfold_folds" not in source
-    assert "rd.write_fold_results(rows, save_dir)" in source
-    assert "rd.run_dirs(args.run_name)" in source
-    assert '"--run_name"' in source
-    # The row must carry what tells two runs apart, not the path it happens to sit in.
-    row = source[source.index("        rows.append({"):][:600]
-    for key in ('"zone": args.zone', '"frequency": args.frequency', '"target": args.target'):
-        assert key in row
+# Two scripts replay the split for reasons of their own and are not runners of the protocol:
+# backfill_sidecars.py reconstructs the exclusions of checkpoints that predate sidecars, which
+# is its whole job, and run_expclr_folds.py is a separate falsifiability experiment with its
+# own baselines. Neither produces results that enter the comparison base.
+_SPLIT_REPLAYS_BY_DESIGN = {"backfill_sidecars.py", "run_expclr_folds.py"}
+
+
+def test_no_runner_rebuilds_the_fold_split():
+    """InterFusion used to run through a driver of its own that rebuilt the k-fold split,
+    and its docstring admitted the original's union step was omitted. Two implementations of
+    the same split have to be kept in step by hand, and if they drift InterFusion stops being
+    comparable to everything else without anything failing: the folds still come out, over
+    other subjects.
+    """
+    offenders = [
+        name for name in os.listdir(ROOT)
+        if name.startswith("run_") and name.endswith(".py")
+        and name not in _SPLIT_REPLAYS_BY_DESIGN | {"run_downstream.py"}
+        and "KFold(" in open(os.path.join(ROOT, name)).read()
+    ]
+    assert not offenders, f"a second fold split lives in {offenders}"
+    assert not os.path.exists(os.path.join(ROOT, "run_interfusion.py"))
+
+
+def test_interfusion_is_configured_through_the_orchestrator():
+    """Its widths could not be passed at all, so it always trained at the article's 500."""
+    source = open(os.path.join(ROOT, "run_downstream.py")).read()
+    for flag in ("--z-dim", "--rnn-hidden", "--dense-hidden", "--flow-levels",
+                 "--strides", "--pretrain-epochs", "--epochs"):
+        assert f'"{flag}"' in source, f"train_interfusion.py never receives {flag}"
+    # The sidecar has to record what was asked for, not constants written beside it.
+    block = source[source.index('    elif method == "InterFusion":'):][:1400]
+    for key in ("cfg[\"z_dim\"]", "cfg[\"rnn_hidden\"]", "cfg[\"dense_hidden\"]"):
+        assert key in block
+
+
+def test_the_interfusion_readout_reaches_the_evaluation():
+    """embedding_stats decides its readout width and no call site ever set it, so the
+    evaluation read a different embedding from the one the run asked for."""
+    source = open(os.path.join(ROOT, "run_downstream.py")).read()
+    assert "embedding_stats=embedding_stats" in source
+    assert '"embedding_stats", INTERFUSION_DEFAULTS["embedding_stats"]' in source
 
 
 @pytest.mark.parametrize("trainer", [

@@ -1,4 +1,5 @@
 import json
+import glob
 import os
 import subprocess
 import re
@@ -37,6 +38,87 @@ RUN_SUBDIRS = ("results", "models", "heads", "figures", "logs")
 # as a read-only fallback so a machine whose weights have not been moved into their run yet is
 # not made to retrain them; nothing is ever written here any more.
 LEGACY_MODEL_DIR = "save/models"
+
+# InterFusion's configuration, in one place because the widths change what the weights are:
+# they reach the checkpoint name, the sidecar and the trainer from here. The article uses 500
+# for both widths; this cohort is three orders of magnitude smaller than the server telemetry
+# the model was proposed for, and narrowing them is the only intervention that ever fixed the
+# severe instability measured on fold 0.
+INTERFUSION_DEFAULTS = {
+    "z_dim": 4,
+    "rnn_hidden": 128,
+    "dense_hidden": 128,
+    "flow_levels": 20,
+    "strides": [2, 1, 2, 1, 2, 2, 2],
+    "epochs": 20,
+    "pretrain_epochs": 20,
+    "embedding_stats": "mean",
+}
+
+
+def interfusion_config(args):
+    """Returns the InterFusion configuration this invocation asked for.
+
+    Args:
+        args (argparse.Namespace): Parsed arguments, or anything carrying the
+            ``interfusion_*`` attributes.
+
+    Returns:
+        dict: Overrides for :data:`INTERFUSION_DEFAULTS`, only for what was given.
+    """
+    return {key: getattr(args, f"interfusion_{key}")
+            for key in INTERFUSION_DEFAULTS
+            if getattr(args, f"interfusion_{key}", None) is not None}
+
+
+def interfusion_checkpoint_glob(zone, frequency, fold_id, cfg):
+    """Returns the pattern matching an InterFusion checkpoint of one configuration.
+
+    Every field that changes the weights is pinned except ``W'``, which the model derives
+    from the stride stack. Recomputing it here would duplicate the model's arithmetic, and
+    that is how a lookup and a trainer drift apart, so it is globbed instead.
+
+    Args:
+        zone (str): Head zone of the processed data.
+        frequency (str): Frequency band.
+        fold_id (str): Fold identifier.
+        cfg (dict): InterFusion configuration, as in :data:`INTERFUSION_DEFAULTS`.
+
+    Returns:
+        str: Filename pattern, without directory.
+    """
+    return interfusion_checkpoint_name(
+        zone, frequency, fold_id, z_dim=cfg["z_dim"],
+        rnn_hidden=cfg["rnn_hidden"], dense_hidden=cfg["dense_hidden"],
+        w_prime="*", epochs=cfg["epochs"],
+    )
+
+
+def resolve_checkpoint(directory, name):
+    """Returns the checkpoint path for a plain name or a pattern.
+
+    Args:
+        directory (str): Directory to look in.
+        name (str): Filename, or a glob pattern when ``W'`` is not known ahead of time.
+
+    Returns:
+        str: The matching path, or the joined path when nothing matches so the caller can
+        report it as absent.
+
+    Raises:
+        SystemExit: If a pattern matches more than one checkpoint, which would mean two
+            stride stacks sharing a name and a silent choice between them.
+    """
+    joined = os.path.join(directory, name)
+    if "*" not in name:
+        return joined
+    matches = sorted(glob.glob(joined))
+    if len(matches) > 1:
+        raise SystemExit(
+            f"[ERROR] {len(matches)} checkpoints match {joined}: {matches}. Two stride "
+            "stacks share a name; remove the stale one instead of letting the run pick."
+        )
+    return matches[0] if matches else joined
 
 # The trainers disagree on what these two arguments are called, and that disagreement is why
 # the orchestrator ended up passing neither: every checkpoint and every loss curve went to the
@@ -555,7 +637,8 @@ def config_data_paths(zone, frequency):
 
 def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_skip=False,
                     allow_legacy=False, seed=42, simclr_flags=None, simclr_tag="",
-                    vae_beta=1.0, vae_free_bits=0.0, model_dir=None, plot_dir=None):
+                    vae_beta=1.0, vae_free_bits=0.0, model_dir=None, plot_dir=None,
+                    interfusion_cfg=None):
     """Trains one encoder for one fold, or reuses the one already trained for it.
 
     The checkpoint and the loss curve belong to the run that asked for them, so both
@@ -579,6 +662,7 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         vae_free_bits (float): Free-bits floor of the VAE objective.
         model_dir (str): Directory this run keeps its checkpoints in.
         plot_dir (str): Directory this run keeps its pre-training curves in.
+        interfusion_cfg (dict): Overrides for :data:`INTERFUSION_DEFAULTS`.
 
     Returns:
         str | None: Path of the checkpoint, or None if the method needs no pre-training
@@ -660,18 +744,21 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
                   f"(incompatible beta scale).")
             allow_legacy = False
     elif method == "InterFusion":
-        model_filename = interfusion_checkpoint_name(zone, frequency, fold_id)
-        # The filename does not encode the architecture, so two variants would
-        # share it; pin the widths the sidecar records and downstream reads back.
+        cfg = dict(INTERFUSION_DEFAULTS, **(interfusion_cfg or {}))
+        # W' comes out of the stride stack and is computed by the model, so the name is
+        # matched by glob rather than recomputed here: duplicating the model's arithmetic
+        # is exactly how the trainer and the lookup drift apart.
+        model_filename = interfusion_checkpoint_glob(
+            zone, frequency, fold_id, cfg)
         expected.update({
             "method": "InterFusion",
             "fold_id": fold_id,
-            "z_dim": 4,
-            "rnn_hidden": 500,
-            "dense_hidden": 500,
-            "flow_levels": 20,
-            "epochs": 20,
-            "pretrain_epochs": 20,
+            "z_dim": cfg["z_dim"],
+            "rnn_hidden": cfg["rnn_hidden"],
+            "dense_hidden": cfg["dense_hidden"],
+            "flow_levels": cfg["flow_levels"],
+            "epochs": cfg["epochs"],
+            "pretrain_epochs": cfg["pretrain_epochs"],
             "lr": 1e-3,
         })
     elif method in EXPCLR_VARIANTS:
@@ -704,12 +791,12 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         return None
 
     model_dir = model_dir or LEGACY_MODEL_DIR
-    model_path = os.path.join(model_dir, model_filename)
+    model_path = resolve_checkpoint(model_dir, model_filename)
 
     # Reuse only a checkpoint whose sidecar matches the intended configuration. The legacy
     # directory is searched too, so weights trained before the layout existed still count as
     # done: a campaign that has to retrain what it already has costs days of GPU.
-    for candidate in (model_path, os.path.join(LEGACY_MODEL_DIR, model_filename)):
+    for candidate in (model_path, resolve_checkpoint(LEGACY_MODEL_DIR, model_filename)):
         if no_skip:
             break
         if checkpoint_is_reusable(candidate, expected, allow_legacy=allow_legacy):
@@ -746,11 +833,19 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
     elif method == "InterFusion":
+        cfg = dict(INTERFUSION_DEFAULTS, **(interfusion_cfg or {}))
         command = [
             "python", "src/train_interfusion.py",
             "--zone", zone,
             "--frequency", frequency,
             "--fold_id", fold_id,
+            "--z-dim", str(cfg["z_dim"]),
+            "--rnn-hidden", str(cfg["rnn_hidden"]),
+            "--dense-hidden", str(cfg["dense_hidden"]),
+            "--flow-levels", str(cfg["flow_levels"]),
+            "--strides", *[str(s) for s in cfg["strides"]],
+            "--pretrain-epochs", str(cfg["pretrain_epochs"]),
+            "--epochs", str(cfg["epochs"]),
             "--exclude_subjects"
         ] + [str(s) for s in test_subjects]
     elif method == "VAE":
@@ -824,10 +919,10 @@ def run_pretraining(method, target, zone, frequency, test_subjects, fold_id, no_
         print(f"  > Pretraining completed successfully")
 
         # The model was already saved with the correct name including fold_id
-        model_path = os.path.join(model_dir, model_filename)
+        model_path = resolve_checkpoint(model_dir, model_filename)
 
         if os.path.exists(model_path):
-            print(f"  > Model saved as: {model_filename}")
+            print(f"  > Model saved as: {os.path.basename(model_path)}")
             return model_path
         else:
             print(f"[WARNING] Expected model not found at {model_path}")
@@ -1040,6 +1135,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
             fold_id=fold_id,
             no_skip=args.no_skip, allow_legacy=args.allow_legacy, seed=pretrain_seed,
             model_dir=model_dir, plot_dir=pretrain_plot_dir,
+            interfusion_cfg=interfusion_config(args),
         )
     else:
         pretrained_models["InterFusion"] = None
@@ -1119,6 +1215,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
 
                 # Determine which pre-trained model to use
                 downstream_method = method
+                embedding_stats = None
                 if method in SIMCLR_VARIANT_NAMES:
                     model_path = pretrained_models.get(method)
                     downstream_method = "SimCLR"
@@ -1133,6 +1230,11 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     model_path = pretrained_models["VAE"]
                 elif method == "InterFusion":
                     model_path = pretrained_models["InterFusion"]
+                    # Its readout width depends on which statistics are pooled, so the
+                    # evaluation has to be told the same thing the run asked for. Left
+                    # unset it silently read a different embedding.
+                    embedding_stats = interfusion_config(args).get(
+                        "embedding_stats", INTERFUSION_DEFAULTS["embedding_stats"])
                 elif method == "TripletLoss":
                     model_path = pretrained_models[f"TripletLoss_{target}"]
                 else:  # PCA o supervised
@@ -1155,6 +1257,7 @@ def execute_fold(fold_idx, train_subjects, test_subjects, args, targets, eval_mo
                     test_subjects=valid_test_subjects,
                     fold_id=fold_id,
                     downstream_method=downstream_method,
+                    embedding_stats=embedding_stats,
                     plot_dir=getattr(args, "plot_dir", None),
                     head_dir=getattr(args, "head_dir", None),
                 )
@@ -1623,6 +1726,64 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
         help="Per-dimension KL floor (nats) for VAE pretraining."
+    )
+    # InterFusion is configured here rather than left at the trainer's defaults, because the
+    # widths change what the weights are and the run has to record which ones it asked for.
+    parser.add_argument(
+        "--interfusion_rnn_hidden",
+        type=int,
+        default=128,
+        help="Backward-GRU hidden units. The article uses 500, but this cohort is three "
+             "orders of magnitude smaller than the server telemetry the model was proposed "
+             "for and the wider model has no data to fill it; reducing it is also the only "
+             "intervention that ever fixed the severe instability seen on fold 0."
+    )
+    parser.add_argument(
+        "--interfusion_dense_hidden",
+        type=int,
+        default=128,
+        help="Dense-stack hidden units. Same reasoning as the recurrent width."
+    )
+    parser.add_argument(
+        "--interfusion_z_dim",
+        type=int,
+        default=4,
+        help="Inter-metric latent width M'."
+    )
+    parser.add_argument(
+        "--interfusion_flow_levels",
+        type=int,
+        default=20,
+        help="RealNVP levels over the inter-metric latent."
+    )
+    parser.add_argument(
+        "--interfusion_strides",
+        nargs="+",
+        type=int,
+        default=[2, 1, 2, 1, 2, 2, 2],
+        help="Stride stack of the temporal encoder; it sets the compressed length W', "
+             "which is why the checkpoint is looked up by glob instead of recomputing it."
+    )
+    parser.add_argument(
+        "--interfusion_epochs",
+        type=int,
+        default=20,
+        help="Main-stage training epochs."
+    )
+    parser.add_argument(
+        "--interfusion_pretrain_epochs",
+        type=int,
+        default=20,
+        help="Stage-1 epochs of the z2-only VAE."
+    )
+    parser.add_argument(
+        "--interfusion_embedding_stats",
+        type=str,
+        default="mean",
+        choices=["mean", "mean_std"],
+        help="Statistics pooled into the InterFusion embedding, which is what its readout "
+             "width depends on. Left unset the evaluation used a different readout from the "
+             "one the run asked for."
     )
     parser.add_argument(
         "--methods",
