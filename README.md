@@ -31,7 +31,11 @@ CL-DaSCI-CIMCYC/
 │   ├── train_mae.py                # Masked Autoencoder pre-training
 │   ├── train_triplet_loss.py       # Triplet loss pre-training
 │   ├── downstream.py               # Linear probe / fine-tuning evaluation
+│   ├── folds.py                    # The subject-level partition, single source of truth
+│   ├── tabular_baseline.py         # Shared evaluation of the spectral baselines
 │   ├── apsd_baseline.py            # FOOOF spectral-descriptor baseline
+│   ├── build_expert_features.py    # Expert descriptor (78 measures) builder
+│   ├── expert_baseline.py          # Expert-descriptor baseline
 │   ├── steeg_former.py             # ST-EEGFormer (ViT) baseline
 │   ├── subject_fingerprint.py      # Subject-identity analysis
 │   ├── base_representation.py      # Raw-signal baseline analysis
@@ -357,16 +361,56 @@ python aggregate_results.py \
 
 ## Baselines
 
+Two spectral baselines answer the same question with different features: how much of a
+child's development the spectrum already carries, with a ridge and no network involved. Both
+share `src/tabular_baseline.py`, so they use the same subject folds as `run_downstream.py`,
+the same row unit and the same anti-leakage discipline.
+
+The row is the unit the target varies over. Age changes between the visits of a child, so a
+row is a session `(subject, age)` labelled with the age of that visit. An intelligence
+quotient measured once does not, so there a row is a child and the visits are averaged into
+it. Both baselines report the per-fold mean and the pooled figure; with two or three children
+per fold, the pooled one is what to quote.
+
 ### FOOOF spectral descriptors
 
-Extracts aperiodic parameters + bandpower features per ROI and trains a Ridge regression.
+Aperiodic exponent and offset, periodic bandpower over five bands, and the alpha peak, per
+region: 9 measures over 4 regions.
 
 ```bash
 python src/apsd_baseline.py \
+    --data_path   data/processed/all_all/processed_windows.npy \
+    --meta_path   data/processed/all_all/processed_metadata.csv \
     --targets     age cit_36mo \
     --cv_strategy kfold \
     --n_folds     10
 ```
+
+`--use_cache` reuses a cached feature table, but only when it was computed with the same
+data, segment length and aperiodic mode. `--aperiodic_mode knee` switches the fit to the one
+the expert descriptor uses.
+
+### Expert descriptor
+
+The 78 measures of `src/build_expert_features.py`, regressed against the target with no
+encoder. Build the descriptor first; the baseline reads the matrix rather than recomputing
+it, so both it and ExpCLR answer with the same numbers.
+
+```bash
+python src/build_expert_features.py --descriptor P_full \
+    --raw_path  data/processed/all_all/processed_windows.npy \
+    --meta_path data/processed/all_all/processed_metadata.csv
+
+python src/expert_baseline.py \
+    --descriptor  P_full \
+    --targets     age cit_36mo \
+    --cv_strategy kfold \
+    --n_folds     10
+```
+
+`--descriptor` also takes `P_madurativo` (32 measures) and `P_aper` (8), which are nested
+subsets of `P_full` and let the comparison say which part of the descriptor carries the
+signal.
 
 ### ST-EEGFormer
 

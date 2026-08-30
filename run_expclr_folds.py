@@ -27,7 +27,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import KFold
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
@@ -38,6 +37,7 @@ from eval_expclr import (
 from models import EnhancedAttentionLSTM
 from build_expert_features import DESCRIPTORS, descriptor_path
 from checkpoint_naming import checkpoint_is_reusable, expclr_checkpoint_name
+from folds import canonical_subject_folds
 from window_loading import NORM_PROVENANCE, apply_fold_normalisation
 
 DATA = Path("data/processed/all_all")
@@ -186,6 +186,9 @@ def subject_folds(subjects: list[str], n_folds: int, base_seed: int) -> list[lis
     which fold a subject belongs to does not depend on how many are later withheld from
     scoring. That is what makes a figure here comparable, fold by fold, with one from there.
 
+    The rule itself lives in ``src/folds.py``, so that the spectral baselines split the same
+    way without a third copy of it drifting from these two.
+
     Args:
         subjects (list[str]): Every subject in the cohort, sorted.
         n_folds (int): Number of splits.
@@ -194,8 +197,7 @@ def subject_folds(subjects: list[str], n_folds: int, base_seed: int) -> list[lis
     Returns:
         list[list[str]]: Held-out subjects of each fold, in fold order.
     """
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=base_seed)
-    return [[subjects[i] for i in test_idx] for _, test_idx in kf.split(subjects)]
+    return canonical_subject_folds(subjects, n_folds, base_seed)
 
 
 def run_folds(methods: list[str], epochs: int, device, seed: int = 42, delta: float = 1.0,
