@@ -12,6 +12,7 @@ Supported methods: PCA, SimCLR, AE, MAE, TripletLoss
 """
 
 import os
+import glob
 import argparse
 
 import numpy as np
@@ -30,7 +31,8 @@ from models import (
     EnhancedAttentionLSTM,
     CNNAutoencoder,
     AttentionLSTMAutoencoder,
-    MaskedAttentionLSTMAutoencoder
+    MaskedAttentionLSTMAutoencoder,
+    VariationalAttentionLSTMAutoencoder,
 )
 from utils import (
     found_k_clusters,
@@ -40,9 +42,10 @@ from utils import (
     compute_clustering_metrics,
     compute_similarity_matrix
 )
+from window_loading import load_windows
 
 # Available methods
-AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss"]
+AVAILABLE_METHODS = ["Raw", "PCA", "SimCLR", "AE", "MAE", "TripletLoss", "VAE"]
 
 
 def get_model_path(method, zone, frequency, target=None, save_model_dir="save/models"):
@@ -72,6 +75,12 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
         if target is None:
             raise ValueError("TripletLoss requires a target to be specified")
         filename = f"Triplet_{target}_{zone}_{frequency}_emb128_m0.4.pth"
+    elif method == "VAE":
+        pattern = os.path.join(save_model_dir, f"{method}_{zone}_{frequency}*.pth")
+        matches = glob.glob(pattern)
+        if not matches:
+            return None
+        return max(matches, key=os.path.getmtime)
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -79,7 +88,7 @@ def get_model_path(method, zone, frequency, target=None, save_model_dir="save/mo
 
 
 def load_model(method, model_path, input_size, n_channels, hidden_size=128,
-               sfreq=250, device='cuda'):
+               sfreq=250, device=None):
     """
     Loads a pre-trained model.
 
@@ -119,10 +128,22 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
             sfreq=sfreq,
             lstm_hidden_size=hidden_size // 2
         )
+    elif method == "VAE":
+        model = VariationalAttentionLSTMAutoencoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            n_channels=n_channels,
+            sfreq=sfreq,
+            lstm_hidden_size=hidden_size // 2
+        )
     else:
         raise ValueError(f"Unknown method for model loading: {method}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    state_dict = torch.load(model_path, map_location=device)
+    if method == "VAE":
+        # The latent prior holds no weights needed for inference.
+        state_dict = {k: v for k, v in state_dict.items() if not k.startswith("prior.")}
+    model.load_state_dict(state_dict, strict=True)
     model.to(device)
     model.eval()
 
@@ -130,7 +151,7 @@ def load_model(method, model_path, input_size, n_channels, hidden_size=128,
 
 
 def extract_representations(X, method, model_path=None, hidden_size=128,
-                           sfreq=250, batch_size=128, device='cuda'):
+                           sfreq=250, batch_size=128, device=None):
     """
     Extracts representations using the specified method.
 
@@ -152,7 +173,7 @@ def extract_representations(X, method, model_path=None, hidden_size=128,
 
     if method == "PCA":
         X_flat = X.reshape(X.shape[0], -1)
-        pca = PCA(n_components=hidden_size)
+        pca = PCA(n_components=hidden_size, random_state=42)
         return pca.fit_transform(X_flat)
 
     # Load model and extract embeddings
@@ -591,16 +612,16 @@ def main():
             k_per_method[method] = int(k)
 
     # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using device: {device}", flush=True)
 
     # Create output directories
     os.makedirs(args.save_fig_dir, exist_ok=True)
 
-    # Load data
+    # Load data. No fold is held out here: this entry point describes the latent
+    # space over the whole cohort, so the stored normalisation is the right one.
     print("[INFO] Loading data...", flush=True)
-    X = np.load(args.data_path)
-    meta = pd.read_csv(args.meta_path)
+    X, meta = load_windows(args.data_path, args.meta_path)
     print(f"  EEG shape: {X.shape}", flush=True)
     print(f"  Number of subjects: {meta['subject'].nunique()}", flush=True)
 

@@ -1,5 +1,6 @@
 import os
 import argparse
+import json
 import numpy as np
 import pandas as pd
 
@@ -11,7 +12,12 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.decomposition import PCA
 
-from models import EnhancedAttentionLSTM, AttentionLSTMAutoencoder, MaskedAttentionLSTMAutoencoder
+from models import (EnhancedAttentionLSTM, AttentionLSTMAutoencoder,
+                    MaskedAttentionLSTMAutoencoder, VariationalAttentionLSTMAutoencoder)
+from interfusion import EMBEDDING_STATS, InterFusionEEG
+from checkpoint_naming import sidecar_path
+from window_loading import load_windows
+from utils import set_seed
 
 # ============================
 #   DATASETS
@@ -50,22 +56,63 @@ class Head(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+# Which representation each pre-training objective actually shapes. A loss applied to a
+# projection head that is thrown away afterwards, as in SimCLR, leaves the embedding
+# underneath as the representation to evaluate; a loss applied to the encoder output
+# itself leaves that output. Evaluating the other one measures something the objective
+# never optimized.
+# The encoder each method leaves behind, for whoever needs to rebuild one from its weights.
+BACKBONE_BY_METHOD = {
+    "SimCLR": EnhancedAttentionLSTM,
+    "ExpCLR": EnhancedAttentionLSTM,
+    "TripletLoss": EnhancedAttentionLSTM,
+    "AE": AttentionLSTMAutoencoder,
+    "MAE": MaskedAttentionLSTMAutoencoder,
+    "VAE": VariationalAttentionLSTMAutoencoder,
+}
+
+LOSS_REPRESENTATION = {"ExpCLR": "projection"}
+DEFAULT_REPRESENTATION = "embedding"
+
+
 class FullModel(nn.Module):
-    """
-    Backbone + head for the final task.
-    Uses backbone.get_embedding(x) as representation.
-    """
-    def __init__(self, backbone, head):
+    """Backbone and head for the downstream task."""
+
+    def __init__(self, backbone, head, representation=DEFAULT_REPRESENTATION):
+        """Initializes the model.
+
+        Args:
+            backbone (nn.Module): Pre-trained encoder.
+            head (nn.Module): Task head.
+            representation (str): ``embedding`` reads the encoder below its projection,
+                ``projection`` reads the encoder output.
+
+        Raises:
+            ValueError: If the representation is not one of the two.
+        """
         super().__init__()
+        if representation not in ("embedding", "projection"):
+            raise ValueError(
+                f"representation must be 'embedding' or 'projection', got {representation!r}"
+            )
         self.backbone = backbone
         self.head = head
+        self.representation = representation
 
     def forward(self, x):
+        """Maps a batch of windows to a prediction.
+
+        Args:
+            x (torch.Tensor): Windows, shape (batch, n_channels, n_samples).
+
+        Returns:
+            torch.Tensor: Head output.
+        """
         # The backbone is already frozen; no need for no_grad here
         # if the optimizer only acts on the head.
-        emb = self.backbone.get_embedding(x)
-        out = self.head(emb)
-        return out
+        emb = (self.backbone(x) if self.representation == "projection"
+               else self.backbone.get_embedding(x))
+        return self.head(emb)
 
 
 # ============================
@@ -106,7 +153,8 @@ def subject_split_indices(subject_ids, test_subjects, seed=42):
 
 def get_loaders_by_subject(X, y, subject_ids,
                            batch_size,
-                           test_subjects):
+                           test_subjects,
+                           seed=None):
     n_samples = len(X)
     assert len(y) == n_samples
     assert len(subject_ids) == n_samples
@@ -119,8 +167,10 @@ def get_loaders_by_subject(X, y, subject_ids,
     train_ds = EEGSupervisedDataset(X_train, y_train, subjects_train)
     test_ds = EEGSupervisedDataset(X_test, y_test, subjects_test)
 
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
     train_loader = DataLoader(train_ds, batch_size=batch_size,
-                              shuffle=True, drop_last=False)
+                              shuffle=True, drop_last=False,
+                              generator=generator)
     test_loader = DataLoader(test_ds, batch_size=batch_size,
                              shuffle=False)
 
@@ -271,10 +321,9 @@ def evaluate_and_plot(
 
     # --- Regression plot ---
     os.makedirs(plot_dir, exist_ok=True)
-    if fold_id:
-        fig_name = f"{model_tag}_{fold_id}_regression_plot.png"
-    else:
-        fig_name = f"{model_tag}_regression_plot.png"
+    # model_tag already ends in the fold, so appending it again produced names like
+    # ..._fold0_fold0_regression_plot.png.
+    fig_name = f"{model_tag}.png"
     fig_path = os.path.join(plot_dir, fig_name)
 
     plt.figure(figsize=(6, 6))
@@ -308,12 +357,15 @@ def evaluate_and_plot(
 # ============================
 
 def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Usando dispositivo: {device}")
 
-    # Load data
-    X = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path)
+    # Load data. The amplitude statistics are refitted on the training subjects
+    # of this fold and then applied to every window, held-out ones included,
+    # exactly like a scaler fitted on train and applied to test.
+    X, meta_df = load_windows(
+        args.data_path, args.meta_path, fit_stats_excluding=args.test_subjects
+    )
 
     # Define target column and task description
     target_col = args.target
@@ -323,6 +375,20 @@ def main(args):
         task_description = f"Cognitive age at 36 (IQ)"
     else:
         task_description = f"Prediction of {target_col}"
+
+    # The expert descriptor replaces the signal as the input of the task. It is one row per
+    # window, in the order of the metadata, so it is swapped in before the split and travels
+    # through the same filtering and the same loaders as any other input.
+    if args.method == "ExpertFeatures":
+        if not args.features_path:
+            raise ValueError("--features_path is required for method 'ExpertFeatures'")
+        features = np.load(args.features_path)
+        if len(features) != len(meta_df):
+            raise ValueError(
+                f"The descriptor has {len(features)} rows and the metadata {len(meta_df)}; "
+                "they are not the same windows.")
+        X = torch.tensor(features, dtype=torch.float32)
+        print(f"Descriptor experto: {X.shape[0]} ventanas x {X.shape[1]} medidas")
 
     # Prepare regression task data: drop windows with missing target label
     mask = ~meta_df[target_col].isna()
@@ -337,40 +403,66 @@ def main(args):
     train_loader, test_loader = get_loaders_by_subject(
         X_task, y_task, subject_ids_task,
         batch_size=args.batch_size,
-        test_subjects=args.test_subjects
+        test_subjects=args.test_subjects,
+        seed=args.seed
     )
 
-    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss"]:
+    if args.method in ["SimCLR", "AE", "MAE", "TripletLoss", "VAE", "ExpCLR", "InterFusion"]:
 
         if not args.model_path:
             raise ValueError(f"The --model_path argument is required for method '{args.method}'")
 
         embedding_size = args.embedding_size
-        
-        # 1) Load pre-trained backbone
-        model_params = {
-            "input_size": X.shape[2], 
-            "hidden_size": embedding_size, 
-            "n_channels": X.shape[1],
-            "sfreq": args.sampling_frequency, 
-            "lstm_hidden_size": embedding_size // 2,
-        }
 
-        model_map = {
-            "SimCLR": EnhancedAttentionLSTM,
-            "AE": AttentionLSTMAutoencoder,
-            "MAE": MaskedAttentionLSTMAutoencoder,
-            "TripletLoss": EnhancedAttentionLSTM
-        }
-        model_class = model_map.get(args.method)
-        
-        backbone = model_class(**model_params).to(device)
-        backbone.load_state_dict(torch.load(args.model_path, map_location=device))
-        print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
+        if args.method == "InterFusion":
+            # Architecture hyperparameters live in the checkpoint sidecar so
+            # train and eval can never drift apart.
+            with open(sidecar_path(args.model_path)) as fh:
+                sc = json.load(fh)
+            # The readout mode is not part of the checkpoint: it decides how the
+            # trained model is read, not how it was trained, so it comes from the
+            # caller and the same weights serve both modes.
+            backbone = InterFusionEEG(
+                x_dim=X.shape[1], window=X.shape[2], z_dim=sc["z_dim"],
+                strides=tuple(sc.get("strides", (2, 1, 2, 1, 2, 2, 2))),
+                rnn_hidden=sc["rnn_hidden"],
+                dense_hidden=sc.get("dense_hidden", 500),
+                flow_levels=sc["flow_levels"],
+                embedding_stats=getattr(args, "embedding_stats", "mean"),
+            ).to(device)
+            backbone.load_state_dict(
+                torch.load(args.model_path, map_location=device), strict=True
+            )
+            embedding_size = backbone.embedding_dim
+            print(f"Pre-trained backbone ('InterFusion') loaded from: "
+                  f"{args.model_path} (embedding_dim={embedding_size})")
+        else:
+            # 1) Load pre-trained backbone
+            model_params = {
+                "input_size": X.shape[2],
+                "hidden_size": embedding_size,
+                "n_channels": X.shape[1],
+                "sfreq": args.sampling_frequency,
+                "lstm_hidden_size": embedding_size // 2,
+            }
+
+            model_class = BACKBONE_BY_METHOD.get(args.method)
+
+            backbone = model_class(**model_params).to(device)
+            state_dict = torch.load(args.model_path, map_location=device)
+            if args.method == "VAE":
+                # The latent prior has no parameters to restore for inference; drop
+                # its keys and load the rest strictly, so a genuine mismatch fails.
+                state_dict = {k: v for k, v in state_dict.items()
+                              if not k.startswith("prior.")}
+            backbone.load_state_dict(state_dict, strict=True)
+            print(f"Pre-trained backbone ('{args.method}') loaded from: {args.model_path}")
 
         # 2) Build full model and optionally freeze backbone
         head = Head(embedding_size, 1).to(device)
-        model = FullModel(backbone, head).to(device)
+        representation = LOSS_REPRESENTATION.get(args.method, DEFAULT_REPRESENTATION)
+        model = FullModel(backbone, head, representation=representation).to(device)
+        print(f"Evaluating the representation the objective shaped: {representation}.")
 
         if args.eval_mode == 'linear_probe': 
             for p in model.backbone.parameters():
@@ -387,7 +479,10 @@ def main(args):
                 model.parameters(), lr=args.lr, weight_decay=args.weight_decay
             )
 
-        model_tag = f"{args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}"
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        # The label is the variant; the method is the family. Naming by the family made the
+        # thirteen SimCLR variants write one file and overwrite each other.
+        model_tag = f"{args.label or args.method}_{args.zone}_{args.frequency}_{args.target}_{args.eval_mode}{fold_suffix}"
     
     elif args.method == "PCA":
         embedding_size = args.embedding_size
@@ -410,13 +505,61 @@ def main(args):
         subjects_test = test_loader.dataset.subjects
 
         # Overwrite DataLoaders with PCA embeddings
-        train_loader = DataLoader(EEGSupervisedDataset(X_train_pca, y_train, subjects_train), batch_size=args.batch_size, shuffle=True)
+        train_loader = DataLoader(EEGSupervisedDataset(X_train_pca, y_train, subjects_train),
+                                  batch_size=args.batch_size, shuffle=True,
+                                  generator=torch.Generator().manual_seed(args.seed))
         test_loader = DataLoader(EEGSupervisedDataset(X_test_pca, y_test, subjects_test), batch_size=args.batch_size, shuffle=False)
 
         # The model is just the 'Head' that learns from the PCA components
         model = Head(embedding_size, 1).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        model_tag = f"PCA_{args.zone}_{args.frequency}_{args.target}"
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        model_tag = f"{args.label or 'PCA'}_{args.zone}_{args.frequency}_{args.target}_linear_probe{fold_suffix}"
+
+    elif args.method == "ExpertFeatures":
+        print(f"\n=== Head on the expert descriptor ===")
+        X_train, y_train = train_loader.dataset.X, train_loader.dataset.y
+        X_test, y_test = test_loader.dataset.X, test_loader.dataset.y
+        subjects_train = train_loader.dataset.subjects
+        subjects_test = test_loader.dataset.subjects
+
+        raw_train, raw_test = X_train.numpy().copy(), X_test.numpy().copy()
+
+        # The descriptor has gaps: the alpha peak is undefined wherever the spectral fit finds
+        # no peak. They are filled with the column median of the training subjects, which is
+        # what src/tabular_baseline.py does with the same matrix.
+        n_missing = int(np.isnan(raw_train).sum() + np.isnan(raw_test).sum())
+        medians = np.nanmedian(raw_train, axis=0)
+        medians = np.where(np.isnan(medians), 0.0, medians)
+        raw_train = np.where(np.isnan(raw_train), medians, raw_train)
+        raw_test = np.where(np.isnan(raw_test), medians, raw_test)
+        print(f"Descriptor: {n_missing} celdas vacias rellenadas con la mediana de entrenamiento")
+
+        # Standardised with the training subjects only, which is what the PCA branch does by
+        # fitting its decomposition on train. A descriptor mixes units, from hertz to
+        # dimensionless ratios, and without this the head starts from a scale that is not
+        # comparable between measures.
+        feature_means = raw_train.mean(axis=0)
+        feature_stds = raw_train.std(axis=0)
+        feature_stds[feature_stds < 1e-8] = 1.0
+        X_train_std = (raw_train - feature_means) / feature_stds
+        X_test_std = (raw_test - feature_means) / feature_stds
+
+        train_loader = DataLoader(EEGSupervisedDataset(X_train_std, y_train, subjects_train),
+                                  batch_size=args.batch_size, shuffle=True,
+                                  generator=torch.Generator().manual_seed(args.seed))
+        test_loader = DataLoader(EEGSupervisedDataset(X_test_std, y_test, subjects_test),
+                                 batch_size=args.batch_size, shuffle=False)
+
+        # The same head the rest of the campaign trains, with the descriptor in place of a
+        # learned representation. Nothing below it is trained, since the measures are computed
+        # by formula and not learned.
+        model = Head(X_train_std.shape[1], 1).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                                      weight_decay=args.weight_decay)
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        model_tag = (f"{args.label or 'ExpertFeatures'}_{args.zone}_{args.frequency}_"
+                     f"{args.target}_linear_probe{fold_suffix}")
 
     elif args.method == "supervised":
         print(f"\n=== Training supervised from scratch ===")
@@ -442,7 +585,8 @@ def main(args):
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=args.lr, weight_decay=args.weight_decay
         )
-        model_tag = f"supervised_{args.zone}_{args.frequency}_{args.target}"
+        fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
+        model_tag = f"{args.label or 'supervised'}_{args.zone}_{args.frequency}_{args.target}_fine_tuning{fold_suffix}"
 
     else:
         raise ValueError(f"Unrecognised method '{args.method}'.")
@@ -501,7 +645,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_dir",
         type=str,
-        default="save/models",
+        default="save/downstream_models",
         help="Directory to save the linear probing model."
     )
     parser.add_argument(
@@ -531,6 +675,12 @@ if __name__ == "__main__":
         type=str,
         default="subject",
         help="Column with the subject ID in the metadata."
+    )
+    parser.add_argument(
+        "--features_path",
+        type=str,
+        default=None,
+        help="Matrix of precomputed features, one row per window, for method ExpertFeatures."
     )
     parser.add_argument(
         "--batch_size",
@@ -579,7 +729,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method",
         type=str,
-        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss"],
+        choices=["SimCLR", "AE", "supervised", "MAE", "PCA", "TripletLoss", "VAE", "ExpCLR",
+                 "ExpertFeatures",
+                 "InterFusion"],
         required=True,
         help="Method to use."
     )
@@ -608,6 +760,24 @@ if __name__ == "__main__":
         default=None,
         help="Fold identifier to include in output filenames."
     )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help="Variant name used to name what this run writes. --method carries the family, "
+             "which picks the architecture; the two differ for every SimCLR and ExpCLR "
+             "variant, and naming by the family makes them overwrite each other."
+    )
+    parser.add_argument(
+        "--embedding_stats",
+        type=str,
+        default="mean",
+        choices=sorted(EMBEDDING_STATS),
+        help="InterFusion readout: 'mean' concatenates the averaged z2 and z1 means "
+             "(channels + z_dim); 'mean_std' appends their standard deviations and doubles "
+             "the width. Ignored by every other method."
+    )
 
     args = parser.parse_args()
+    set_seed(args.seed)
     main(args)

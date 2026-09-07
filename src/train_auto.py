@@ -9,8 +9,10 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import OneCycleLR
 
+from checkpoint_naming import ae_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
 from models import AttentionLSTMAutoencoder
-from utils import split_dataset, create_dataloader
+from utils import split_dataset, create_dataloader, set_seed
 
 # -------------------------------------------------------------------------
 # TRAINING
@@ -200,16 +202,26 @@ def main():
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
 
     # Setup
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Usando dispositivo: {device}")
 
     # Load data
     print("[INFO] Loading data...")
-    X_np = np.load(args.data_path)
-    meta_df = pd.read_csv(args.meta_path) # Load metadata to filter subjects
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the pre-training windows never saw them.
+    X_np, meta_df = load_windows(
+        args.data_path, args.meta_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
@@ -224,9 +236,9 @@ def main():
     print("EEG dimensions: ", X.shape)
 
     # DataLoaders
-    train_data, val_data = split_dataset(X)
+    train_data, val_data = split_dataset(X, seed=args.seed)
     train_loader, val_loader = create_dataloader(
-        train_data, val_data, batch_size=args.batch_size
+        train_data, val_data, batch_size=args.batch_size, seed=args.seed
     )
 
     # Model
@@ -243,8 +255,10 @@ def main():
     criterion = nn.MSELoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-    model_name = f"AE_{args.zone}_{args.frequency}{fold_suffix}_hidden{args.hidden_size}_e{args.epochs}"
+    model_name = ae_checkpoint_name(
+        args.zone, args.frequency, args.fold_id,
+        hidden_size=args.hidden_size, epochs=args.epochs,
+    )[:-len(".pth")]
 
     print(f"[INFO] Starting model training: {model_name}")
     fit_model(
@@ -260,6 +274,21 @@ def main():
         save_fig_dir=args.save_fig_dir,
         max_lr=args.lr,
     )
+
+    if args.save_model_dir:
+        write_sidecar(os.path.join(args.save_model_dir, f"{model_name}.pth"), {
+            "method": "AE",
+            "zone": args.zone,
+            "frequency": args.frequency,
+            "fold_id": args.fold_id,
+            "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+            "norm_stats": NORM_PROVENANCE,
+            "seed": getattr(args, "seed", None),
+            "hidden_size": args.hidden_size,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "n_windows": int(len(X)),
+        })
 
     print("[INFO] Pipeline completed.")
 

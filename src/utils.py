@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 import torch
-from torch.utils.data import random_split
+from torch.utils.data import random_split, Subset
 from torch.utils.data import DataLoader, TensorDataset
 
 from sklearn.cluster import KMeans
@@ -848,22 +848,62 @@ def compute_similarity_matrix(methods_dict):
 
     return sim_matrix.astype(float)
 
-def split_dataset(X, train_percentaje=0.8):
+def set_seed(seed):
+    """Seeds the python, numpy and torch RNGs for reproducible training.
+
+    Args:
+        seed (int): Seed applied to all three generators.
     """
-    Converts a NumPy array to a Torch tensor and splits it into train/val.
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def split_dataset(X, train_percentaje=0.8, seed=None, groups=None):
+    """Converts a NumPy array to a Torch tensor and splits it into train/val.
+
+    Args:
+        X (np.ndarray): Windows of shape (N, C, T).
+        train_percentaje (float): Fraction assigned to the training split.
+        seed (int | None): Seed for the split; None leaves it unseeded.
+        groups (Sequence | None): One group label per window (e.g. the subject).
+            When given, the split is made over groups so that no group appears on
+            both sides, which is what a validation metric needs to be independent.
+            When None the split is per window, as before.
+
+    Returns:
+        tuple: (train subset, validation subset) of a TensorDataset of (x, x).
     """
     data = torch.tensor(X, dtype=torch.float32)  # (N, C, T)
+    dataset = TensorDataset(data, data)
 
-    train_size = int(train_percentaje * X.shape[0])
-    val_size = X.shape[0] - train_size
-    return random_split(TensorDataset(data, data), [train_size, val_size])
+    if groups is None:
+        train_size = int(train_percentaje * X.shape[0])
+        val_size = X.shape[0] - train_size
+        generator = torch.Generator().manual_seed(seed) if seed is not None else None
+        return random_split(dataset, [train_size, val_size], generator=generator)
+
+    groups = np.asarray(groups)
+    if len(groups) != X.shape[0]:
+        raise ValueError(f"groups has {len(groups)} entries for {X.shape[0]} windows.")
+    unique = np.unique(groups)
+    if len(unique) < 2:
+        raise ValueError("A grouped split needs at least two distinct groups.")
+    order = np.random.default_rng(seed).permutation(len(unique))
+    n_train = min(max(1, round(train_percentaje * len(unique))), len(unique) - 1)
+    train_groups = set(unique[order[:n_train]])
+    is_train = np.array([g in train_groups for g in groups])
+    return (Subset(dataset, np.flatnonzero(is_train).tolist()),
+            Subset(dataset, np.flatnonzero(~is_train).tolist()))
 
 
-def create_dataloader(train_data, val_data, batch_size=128):
+def create_dataloader(train_data, val_data, batch_size=128, seed=None):
     """
     Creates train and validation dataloaders.
     """
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True,
+                              generator=generator)
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
 
@@ -929,7 +969,7 @@ def found_k_clusters(embeddings_np, filename="cluster_metrics.png"):
     plt.savefig(filename, dpi=300)
     plt.close(fig) 
 
-def infer_embeddings_in_batches(model, X_data, batch_size=512, device='cuda'):
+def infer_embeddings_in_batches(model, X_data, batch_size=512, device=None):
 
     model.eval()
     all_embeddings = []

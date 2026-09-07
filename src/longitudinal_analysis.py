@@ -402,6 +402,7 @@ def train_models_per_age(
     hidden_size: int,
     sampling_frequency: int,
     temperature: float,
+    seed: int = 42,
 ):
     """
     Trains one SimCLR model per age (simclr_age_{age}.pth) and saves:
@@ -423,7 +424,8 @@ def train_models_per_age(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            drop_last=True
+            drop_last=True,
+            generator=torch.Generator().manual_seed(seed)
         )
 
         model = EnhancedAttentionLSTM(
@@ -965,7 +967,7 @@ def parse_args():
 def main():
     args = parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using device: {device}")
 
     data_path = os.path.join(args.data_dir, args.data_file)

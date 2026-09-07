@@ -472,11 +472,14 @@ def prepare_dataloaders(X, y, batch_size=32, train_ratio=0.8, seed=42):
         generator=torch.Generator().manual_seed(seed)
     )
 
+    use_cuda = torch.cuda.is_available()
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True
+        train_dataset, batch_size=batch_size, shuffle=True,
+        num_workers=4 if use_cuda else 0, pin_memory=use_cuda,
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True
+        val_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=4 if use_cuda else 0, pin_memory=use_cuda,
     )
 
     return train_loader, val_loader
@@ -627,7 +630,7 @@ def fine_tune_model(
 
 
 @torch.no_grad()
-def extract_embeddings(model, X, batch_size=32, device='cuda'):
+def extract_embeddings(model, X, batch_size=32, device=None):
     """
     Extracts model embeddings for downstream analysis.
 
@@ -752,7 +755,7 @@ def main():
     args = parser.parse_args()
 
     # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using device: {device}", flush=True)
 
     # Load data

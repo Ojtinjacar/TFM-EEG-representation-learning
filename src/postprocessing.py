@@ -1,15 +1,16 @@
 import numpy as np
 import pandas as pd
 import argparse
+import json
 import os
 from mne.filter import filter_data
 
-PRESET_ZONES = {
-    "central" : ['E35', 'E29', 'E13', 'E6', 'E112', 'E111', 'E110', 'E41', 'E36', 'E30', 'E7', 'E106', 'E105', 'E104', 'E103', 'E47', 'E42', 'E37', 'E31', 'Cz', 'E80', 'E87', 'E93', 'E98', 'E54', 'E55', 'E79'],
-    "frontal" : ['E33', 'E34', 'E27', 'E23', 'E18', 'E16', 'E10', 'E3', 'E123', 'E116', 'E122', 'E28', 'E24', 'E19', 'E11', 'E4', 'E124', 'E117', 'E20', 'E12','E5', 'E118' ],
-    "parietal" : ['E52', 'E53', 'E61', 'E62', 'E78', 'E86', 'E60', 'E67', 'E72', 'E77', 'E85', 'E92', 'E59', 'E91'],
-    "occipital" : ['E66', 'E71', 'E76', 'E84', 'E70', 'E75', 'E83']  
-}
+from montage import (
+    MONTAGE_SIDECAR,
+    PRESET_ZONES,
+    load_channel_names,
+    select_channel_indices,
+)
 
 # Metadata map
 COLUMN_MAP = {
@@ -39,6 +40,8 @@ COLUMN_MAP = {
     "IQ_ICV_Perc_36mo": "icv_perc_36mo",
     "IQ_IVE_36mo": "ive_36mo",
     "IQ_IVE_Perc_36mo": "ive_perc_36mo",
+    # Known typo in the source spreadsheet ("362o" instead of "36mo").
+    "IQ_IVE_Perc_362o": "ive_perc_36mo",
     "IQ_IRF_36mo": "irf_36mo",
     "IQ_IRF_Perc_36mo": "irf_perc_36mo",
     "IQ_IMT_36mo": "imt_36mo",
@@ -48,12 +51,8 @@ COLUMN_MAP = {
 }
 
 def get_channel_indices(zones, all_channels):
-    selected = set()
-    for zone in zones:
-        if zone not in PRESET_ZONES:
-            raise ValueError(f"Zone {zone} not found. Available zones: {list(PRESET_ZONES.keys())}")
-        selected.update(PRESET_ZONES[zone])
-    return [i for i, ch in enumerate(all_channels) if ch in selected]
+    """Returns the indices of the channels belonging to the given zones."""
+    return select_channel_indices(zones, all_channels)
 
 def apply_windows(X, meta, sfreq, window_sec):
     samples_per_window = int(window_sec * sfreq)
@@ -90,17 +89,25 @@ def main(args):
     X = np.load(args.data_path)
     meta = pd.read_csv(args.meta_path)
     socio_meta = pd.read_csv(args.socio_path).rename(columns={"ID": "subject"} | COLUMN_MAP)
+    unmapped = [c for c in socio_meta.columns
+                if c.startswith(("IQ_", "IBQ_", "CBQ_", "Z_"))]
+    if unmapped:
+        print(f"[postprocessing][WARN] socio columns not covered by COLUMN_MAP "
+              f"(kept under their raw names): {unmapped}")
 
     # Merge both metadata dataframes
     meta = meta.merge(socio_meta, on="subject", how="left")
 
-    with open(args.channels_txt) as f:
-        all_channels = [line.strip() for line in f.readlines()]
+    all_channels = load_channel_names(args.channels_txt)
 
-    # Channel selection
+    # Channel selection. The kept names travel with the output: the selection is
+    # by region membership, so it cannot be recovered from the channel count.
     if args.zones:
         indices = get_channel_indices(args.zones, all_channels)
         X = X[:, indices, :]
+        kept_channels = [all_channels[i] for i in indices]
+    else:
+        kept_channels = list(all_channels)
 
     # Frequency filtering
     SFREQ = X.shape[-1] / args.seconds 
@@ -113,10 +120,33 @@ def main(args):
             verbose=True
         )
 
-    # Standarization with mean, std from all signal per channel
-    mean_ch = X.mean(axis=(0, 2), keepdims=True)  # shape: (1, n_channels, 1)
-    std_ch = X.std(axis=(0, 2), keepdims=True)    # shape: (1, n_channels, 1)
-    X = (X - mean_ch) / (std_ch + 1e-12)
+    # Normalization statistics can exclude held-out subjects so that test data
+    # never contributes to the transform (train-only stats are then applied to
+    # every epoch, exactly like a scaler fitted on train and applied to test).
+    if args.fit_stats_excluding:
+        stats_mask = ~meta["subject"].isin(args.fit_stats_excluding).values
+        if not stats_mask.any():
+            raise ValueError("fit_stats_excluding removed every epoch; "
+                             "no data left to fit the normalization statistics.")
+        print(f"[postprocessing] Normalization stats fitted excluding "
+              f"{len(args.fit_stats_excluding)} subjects "
+              f"({int((~stats_mask).sum())} epochs held out of the fit).")
+    else:
+        stats_mask = np.ones(len(X), dtype=bool)
+
+    if args.norm_mode == "per_channel":
+        mean_ch = X[stats_mask].mean(axis=(0, 2), keepdims=True)
+        std_ch = X[stats_mask].std(axis=(0, 2), keepdims=True)
+        X = (X - mean_ch) / (std_ch + 1e-12)
+    elif args.norm_mode == "global":
+        mean_g = X[stats_mask].mean()
+        std_g = X[stats_mask].std()
+        X = (X - mean_g) / (std_g + 1e-12)
+    elif args.norm_mode == "none":
+        pass
+    else:
+        raise ValueError(f"Unknown norm_mode: {args.norm_mode}")
+    print(f"[postprocessing] Amplitude normalization mode: {args.norm_mode}")
 
     # Window extraction
     X_win, meta_win = apply_windows(X, meta, SFREQ, args.seconds)
@@ -125,10 +155,31 @@ def main(args):
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)
     np.save(os.path.join(args.output_path, "processed_windows.npy"), X_win)
-    meta_win.to_csv(os.path.join(args.output_path, "processed_metadata.csv"), index=False)  
+    meta_win.to_csv(os.path.join(args.output_path, "processed_metadata.csv"), index=False)
+
+    # Provenance manifest: without it there is no way to know afterwards which
+    # normalization/band/zones produced a processed directory.
+    sidecar = os.path.join(args.output_path, MONTAGE_SIDECAR)
+    with open(sidecar, "w") as fh:
+        fh.write("\n".join(kept_channels) + "\n")
+    print(f"[postprocessing] Montage of {len(kept_channels)} channels written to {sidecar}")
+
+    manifest = {
+        "args": {k: (str(v) if isinstance(v, os.PathLike) else v)
+                 for k, v in vars(args).items()},
+        "channels": kept_channels,
+        "input_file": os.path.abspath(args.data_path),
+        "input_size_bytes": os.path.getsize(args.data_path),
+        "input_mtime": os.path.getmtime(args.data_path),
+        "output_shape": list(X_win.shape),
+        "sfreq": SFREQ,
+    }
+    with open(os.path.join(args.output_path, "manifest.json"), "w") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+    print(f"[postprocessing] Manifest written to "
+          f"{os.path.join(args.output_path, 'manifest.json')}")
 
 if __name__ == "__main__":
-    
     parser = argparse.ArgumentParser(
         description="Process EEG data."
     )
@@ -138,6 +189,14 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Path to the EEG data file."
+    )
+
+    parser.add_argument(
+        "--fit_stats_excluding",
+        nargs="*",
+        default=None,
+        help="Subject IDs excluded from the normalization statistics fit "
+             "(the transform is still applied to their epochs)."
     )
 
     parser.add_argument(
@@ -186,6 +245,19 @@ if __name__ == "__main__":
         type=float,
         default=5.0,
         help="Seconds to build windows"
+    )
+
+    parser.add_argument(
+        "--norm_mode",
+        type=str,
+        default="per_channel",
+        choices=["per_channel", "global", "none"],
+        help=(
+            "Amplitude normalization: 'per_channel' (z-score per channel, default, "
+            "legacy behaviour); 'global' (single mean/std shared across channels, "
+            "preserves inter-zone amplitude); 'none' (no amplitude normalization, "
+            "recommended for FOOOF/APSD spectral features)."
+        )
     )
 
     parser.add_argument(

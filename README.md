@@ -4,7 +4,16 @@ Representation learning on Developmental Infant EEG. A collaboration between [Da
 
 ## Overview
 
-The pipeline preprocesses multi-session infant EEG recordings (EEGLAB `.set` files), trains self-supervised backbones (SimCLR, Autoencoder, Masked Autoencoder, Triplet Loss), and evaluates the learned representations on downstream regression tasks (age prediction, IQ estimation) via linear probing or fine-tuning. Classical baselines (PCA, FOOOF spectral descriptors, ST-EEGFormer) are included for comparison.
+The pipeline preprocesses multi-session infant EEG recordings (EEGLAB `.set` files), trains self-supervised backbones, and evaluates the learned representations on downstream regression tasks (age prediction, IQ estimation) via linear probing or fine-tuning. Classical baselines (PCA, FOOOF spectral descriptors, expert descriptor, ST-EEGFormer) are included for comparison.
+
+Four backbones are inherited: SimCLR, Autoencoder, Masked Autoencoder and Triplet Loss. Four more were added for this work, and every one of them shares the encoder, the folds and the downstream protocol of the inherited ones:
+
+| Method | What builds the training signal |
+|---|---|
+| SimCLR with neighbour positives | The closest real window instead of a synthetic augmentation |
+| VAE | Reconstruction through a probabilistic bottleneck |
+| InterFusion | A two-latent hierarchy, one per axis of the window |
+| ExpCLR | A continuous expert descriptor, not a binary pair |
 
 ## Project structure
 
@@ -30,8 +39,27 @@ CL-DaSCI-CIMCYC/
 │   ├── train_auto.py               # Autoencoder pre-training
 │   ├── train_mae.py                # Masked Autoencoder pre-training
 │   ├── train_triplet_loss.py       # Triplet loss pre-training
+│   ├── train_vae.py                # Variational autoencoder pre-training
+│   ├── train_interfusion.py        # InterFusion HVAE, two-stage pre-training
+│   ├── train_expclr.py             # Expert-guided contrastive pre-training
+│   ├── interfusion.py              # InterFusion model ported to PyTorch
+│   ├── neighbor_positives.py       # Nearest-neighbour positive sampling
+│   ├── build_neighbor_index.py     # Precomputed neighbour indices
+│   ├── build_neighbor_index_ablation.py  # Cross-subject / different-age indices
+│   ├── epoch_features.py           # Per-epoch spectral descriptors over ROIs
+│   ├── materialize_p_aper.py       # P_aper descriptor, selected out of P_full
 │   ├── downstream.py               # Linear probe / fine-tuning evaluation
+│   ├── folds.py                    # The subject-level partition, single source of truth
+│   ├── window_loading.py           # Fold-safe loading of the processed windows
+│   ├── montage.py                  # Electrode montage and its regions of interest
+│   ├── checkpoint_naming.py        # Checkpoint names and sidecar metadata
+│   ├── consolidate_results.py      # Pools every fold result into one base
+│   ├── eval_expclr.py              # Ridge probe of an ExpCLR encoder
+│   ├── latent_map.py               # Latent-space maps and clustering table
+│   ├── tabular_baseline.py         # Shared evaluation of the spectral baselines
 │   ├── apsd_baseline.py            # FOOOF spectral-descriptor baseline
+│   ├── build_expert_features.py    # Expert descriptor (78 measures) builder
+│   ├── expert_baseline.py          # Expert-descriptor baseline
 │   ├── steeg_former.py             # ST-EEGFormer (ViT) baseline
 │   ├── subject_fingerprint.py      # Subject-identity analysis
 │   ├── base_representation.py      # Raw-signal baseline analysis
@@ -46,8 +74,14 @@ CL-DaSCI-CIMCYC/
 ├── notebook/
 │   └── signal_visualization.ipynb  # EEG signal inspection
 │
+├── tests/                          # pytest suite over the pipeline invariants
+│
 ├── run_downstream.py               # Cross-validation orchestrator
 ├── run_pipeline.py                 # End-to-end pipeline runner
+├── run_expclr_folds.py             # ExpCLR against its baselines, fold by fold
+├── tune_expclr.py                  # Staged hyperparameter search for ExpCLR
+├── subject_identity_probe.py       # Subject identity carried by a frozen encoder
+├── backfill_sidecars.py            # Sidecar configs for pre-sidecar checkpoints
 ├── aggregate_results.py            # Combine parallel CV results
 └── search_plot.py                  # Grid-search visualisation
 ```
@@ -69,6 +103,15 @@ conda activate dasci-cimcyc
 ```
 
 Key packages included: `python=3.11`, `pytorch=2.5.1` (CUDA 11.8), `mne=1.9`, `scikit-learn=1.6`, `numpy=2.0`, `pandas=2.2`, `matplotlib=3.10`, `seaborn=0.13`, `specparam=2.0` (FOOOF), `timm=1.0`.
+
+On Apple Silicon the CUDA build does not apply, so use the macOS environment instead:
+
+```bash
+conda env create -f environment_mac.yml
+conda activate dasci-cimcyc
+```
+
+The scripts added for this work take `--device auto`, which picks CUDA, then the MPS backend, then CPU. Pass `--device cpu` to force it, and `--device mps` to fail loudly rather than fall back.
 
 ### 3. Create output directories
 
@@ -158,6 +201,63 @@ python src/train_simclr.py \
 
 Saved as: `save/models/SimCLR_<zone>_<frequency>_<fold_id>_batch_512_lr_0.001_wd_0.0001_temperature_0.05.pth`
 
+### SimCLR with neighbour positives
+
+The same script and the same loss, with the positive taken from the dataset instead of built by
+perturbing the anchor. The neighbour of a window is the closest other window of the same child and
+session, so both views are real signal and neither has been altered.
+
+The index is precomputed once per zone, because resolving the nearest window during training would
+dominate the epoch:
+
+```bash
+python src/build_neighbor_index.py \
+    --data_path  data/processed/all_all/processed_windows.npy \
+    --meta_path  data/processed/all_all/processed_metadata.csv \
+    --output_dir data/processed/neighbor_index \
+    --metrics    cosine wasserstein riemann \
+    --k          2 \
+    --exclude_lag 1 \
+    --exclude_subjects B010 B011 B014
+```
+
+`--exclude_lag 1` refuses the window immediately before or after the anchor, so a positive is never
+just its own continuation. `--k` is how many candidates are kept per window, and `--metrics` writes
+one index per distance. Pre-training then reads that index:
+
+```bash
+python src/train_simclr.py \
+    --data_path          data/processed/5_s \
+    --zone               all \
+    --frequency          all \
+    --positives          neighbor \
+    --neighbor_metric    cosine \
+    --neighbor_index_dir data/processed/neighbor_index \
+    --exclude_subjects   B010 B011 B014 \
+    --fold_id            fold0_nbrcosine
+```
+
+`--neighbor_view1` decides whether the anchor itself is augmented (`augmented`) or enters as it is
+(`raw`, the default). The checkpoint follows the SimCLR pattern, and the variant travels in
+`--fold_id`, which is why the orchestrator appends a tag to it.
+
+Three ablation indices answer what the neighbour is really pairing. They come from a second script
+and drop into the same `--neighbor_index_dir` flag:
+
+```bash
+python src/build_neighbor_index_ablation.py \
+    --strategy   crosssubj \
+    --data_path  data/processed/all_all/processed_windows.npy \
+    --meta_path  data/processed/all_all/processed_metadata.csv \
+    --output_dir data/processed/neighbor_index_crosssubj \
+    --exclude_subjects B010 B011 B014
+```
+
+`crosssubj` groups by age and forces the positive to come from **another** child, so what survives
+is developmental and not individual. `diffage` groups by child and forces **another** age. The third
+index is the plain one rebuilt with `--exclude_lag 0`, which lets the adjacent window back in and
+measures how much of the result was temporal contiguity.
+
 ### Autoencoder
 
 ```bash
@@ -215,6 +315,100 @@ python src/train_triplet_loss.py \
 `--target` accepts `age` or `cit_36mo`.
 
 Saved as: `save/models/Triplet_<target>_<zone>_<frequency>_<fold_id>_emb128_m0.4.pth`
+
+### VAE
+
+The inherited autoencoder with a probabilistic bottleneck: the encoder returns a mean and a log
+variance instead of a point, and the loss adds the KL divergence against a standard normal prior.
+The representation taken downstream is the mean, never a sample.
+
+```bash
+python src/train_vae.py \
+    --data-path        data/processed/all_all/processed_windows.npy \
+    --meta-path        data/processed/all_all/processed_metadata.csv \
+    --zone             all \
+    --frequency        all \
+    --hidden-size      128 \
+    --beta             1.0 \
+    --kl-anneal-epochs 20 \
+    --epochs           100 \
+    --save-model-dir   save/models \
+    --exclude_subjects B010 B011 B014 \
+    --fold_id          fold0
+```
+
+`--beta` is declared in canonical units and rescaled before entering the loss, so `1.0` is the
+standard VAE regardless of how many channels and samples a window has. `--kl-anneal-epochs` is the
+linear ramp that takes the weight from zero to its value, which is what keeps the latent from
+collapsing before it has learnt to reconstruct. `--free-bits` sets a per-dimension KL floor, and
+`--latent_dim` decouples the latent width from the encoder width.
+
+Saved as: `save/models/VAE_<zone>_<frequency>_<fold_id>_hidden128_beta1.0_priorstandard_fb0.0_e100.pth`
+
+### InterFusion
+
+The hierarchical VAE of Li et al. (KDD 2021), ported to PyTorch for EEG windows. Two stochastic
+latents instead of one: `z2` compresses the time axis and keeps the electrodes, and `z1` compresses
+the electrodes over the intermediate reconstruction, so it arrives already knowing what the temporal
+one captured. Training runs in two stages, a `z2`-only VAE first and the full model afterwards.
+
+```bash
+python src/train_interfusion.py \
+    --data-path       data/processed/all_all/processed_windows.npy \
+    --meta-path       data/processed/all_all/processed_metadata.csv \
+    --zone            all \
+    --frequency       all \
+    --z-dim           4 \
+    --rnn-hidden      500 \
+    --dense-hidden    500 \
+    --flow-levels     20 \
+    --pretrain-epochs 20 \
+    --epochs          20 \
+    --save-model-dir  save/models \
+    --exclude_subjects B010 B011 B014 \
+    --fold_id         fold0
+```
+
+`--pretrain-epochs` is the first stage and `--epochs` the second. The recurrent and dense widths are
+part of the checkpoint name because they change what the weights are: without them a run at 128 and
+one at 500 wrote the same file and the second replaced the first.
+
+Saved as: `save/models/InterFusion_<zone>_<frequency>_<fold_id>_m4_r500_d500_w40_e20.pth`
+
+### ExpCLR
+
+Contrastive pre-training against a continuous expert descriptor. Every pair of the batch gets a
+target distance proportional to how different the descriptor says the two windows are, so there is
+no binary positive and no augmentation. Build the descriptor of the zone before training, since the
+loss compares against it:
+
+```bash
+python src/build_expert_features.py --descriptor P_full \
+    --raw_path  data/processed/all_all/processed_windows.npy \
+    --meta_path data/processed/all_all/processed_metadata.csv
+
+python src/train_expclr.py \
+    --data_path        data/processed/5_s \
+    --descriptor       P_madurativo \
+    --zone             all \
+    --frequency        all \
+    --delta            1.0 \
+    --temperature      1.0 \
+    --batch_size       64 \
+    --lr               5e-3 \
+    --num_epochs       100 \
+    --exclude_subjects B010 B011 B014 \
+    --fold_id          fold0
+```
+
+`--delta` is the target distance for maximally dissimilar pairs, and `--temperature` how much the
+gradient concentrates on the worst-fitting ones. `--sim_max train` estimates the normalising
+distance once over the training subjects and holds it fixed, so a pair always gets the same
+similarity; `batch` recovers the per-batch reference of the original method. `--loss_on` decides
+whether the loss is measured on the projection or on the embedding, and `--linear_similarity` drops
+the square of the similarity.
+
+Saved as: `save/models/ExpCLR_<zone>_<frequency>_<fold_id>_<descriptor>_batch_64_lr_0.005_tau_1.0_delta_1.0.pth`
 
 ---
 
@@ -292,6 +486,34 @@ python run_downstream.py \
     --save_dir    save/downstream_results
 ```
 
+`run_downstream.py` pre-trains what a fold needs and then evaluates it, so a run covers every
+method unless `--methods` restricts it. Two of them expand into variants:
+
+```bash
+python run_downstream.py \
+    --cv_strategy     kfold \
+    --n_folds         10 \
+    --targets         age \
+    --eval_modes      linear_probe \
+    --zone            all frontal parietal \
+    --methods         SimCLR ExpCLR VAE InterFusion \
+    --simclr_variants SimCLR SimCLR-nbr-cosine SimCLR-xsubj-cosine \
+    --expclr_variants ExpCLR \
+    --run_name        rl_extensions
+```
+
+`--simclr_variants` names a neighbour index rather than a different script: the strategies are
+`nbr`, `xsubj`, `diffage` and `lag0`, each combined with `cosine`, `wasser` or `riemann`, which
+gives the twelve `SimCLR-<strategy>-<metric>` variants plus plain `SimCLR`. The index is resolved
+per zone, so a variant always means "nearest window according to this zone", and a run refuses to
+start if the descriptor or index its zone needs is missing.
+
+A checkpoint is reused only when its sidecar matches the configuration the run asks for, so
+`--vae_beta`, `--interfusion_rnn_hidden` and their siblings change what counts as a valid reuse.
+`--no_skip` retrains regardless, `--allow_legacy` accepts checkpoints written before sidecars
+existed, and a relaunch walks past the zones it already finished. `--run_name` groups the output
+under `save/<run>/`.
+
 ### K-fold parallelised across 5 SLURM nodes (2 folds each)
 
 | Node | Command |
@@ -355,18 +577,73 @@ python aggregate_results.py \
 
 ---
 
+### Consolidate every fold into one base
+
+`aggregate_results.py` combines the parallel folds of one run. `src/consolidate_results.py` goes one
+step further and pools every run into a single comparison base, keyed by the dimensions that tell
+two results apart, which is variant, zone, band, target and fold:
+
+```bash
+python src/consolidate_results.py \
+    --source  save \
+    --out     results \
+    --n_folds 10
+```
+
+---
+
 ## Baselines
+
+Two spectral baselines answer the same question with different features: how much of a
+child's development the spectrum already carries, with a ridge and no network involved. Both
+share `src/tabular_baseline.py`, so they use the same subject folds as `run_downstream.py`,
+the same row unit and the same anti-leakage discipline.
+
+The row is the unit the target varies over. Age changes between the visits of a child, so a
+row is a session `(subject, age)` labelled with the age of that visit. An intelligence
+quotient measured once does not, so there a row is a child and the visits are averaged into
+it. Both baselines report the per-fold mean and the pooled figure; with two or three children
+per fold, the pooled one is what to quote.
 
 ### FOOOF spectral descriptors
 
-Extracts aperiodic parameters + bandpower features per ROI and trains a Ridge regression.
+Aperiodic exponent and offset, periodic bandpower over five bands, and the alpha peak, per
+region: 9 measures over 4 regions.
 
 ```bash
 python src/apsd_baseline.py \
+    --data_path   data/processed/all_all/processed_windows.npy \
+    --meta_path   data/processed/all_all/processed_metadata.csv \
     --targets     age cit_36mo \
     --cv_strategy kfold \
     --n_folds     10
 ```
+
+`--use_cache` reuses a cached feature table, but only when it was computed with the same
+data, segment length and aperiodic mode. `--aperiodic_mode knee` switches the fit to the one
+the expert descriptor uses.
+
+### Expert descriptor
+
+The 78 measures of `src/build_expert_features.py`, regressed against the target with no
+encoder. Build the descriptor first; the baseline reads the matrix rather than recomputing
+it, so both it and ExpCLR answer with the same numbers.
+
+```bash
+python src/build_expert_features.py --descriptor P_full \
+    --raw_path  data/processed/all_all/processed_windows.npy \
+    --meta_path data/processed/all_all/processed_metadata.csv
+
+python src/expert_baseline.py \
+    --descriptor  P_full \
+    --targets     age cit_36mo \
+    --cv_strategy kfold \
+    --n_folds     10
+```
+
+`--descriptor` also takes `P_madurativo` (32 measures) and `P_aper` (8), which are nested
+subsets of `P_full` and let the comparison say which part of the descriptor carries the
+signal.
 
 ### ST-EEGFormer
 
@@ -375,6 +652,23 @@ Fine-tunes or linearly probes a pre-trained Spatial-Temporal EEG Transformer.
 ```bash
 python src/steeg_former.py --target cit_36mo --freeze-backbone
 ```
+
+---
+
+## Tests
+
+The suite covers what a silent regression would cost most: that a fold never sees the statistics of
+another, that a checkpoint is not reused under a configuration it was not trained with, that two
+runs with the same seed produce the same weights, and that the montage and the descriptor describe
+the zone they claim to.
+
+```bash
+pytest -q                      # everything
+pytest tests/test_seeding.py   # one file
+pytest -q -k expclr            # by keyword
+```
+
+The tests build their own small arrays, so they need neither the dataset nor a trained checkpoint.
 
 ---
 
@@ -404,8 +698,34 @@ python src/dataset_summary.py
 python search_plot.py
 ```
 
+The scripts added for this work:
+
+```bash
+# Latent-space maps of several methods at once, plus their clustering table
+python src/latent_map.py \
+    --methods    PCA SimCLR VAE InterFusion ExpCLR \
+    --projection tsne \
+    --color_by   age \
+    --zone       all \
+    --fold_id    fold0
+
+# How much of the subject's identity a frozen encoder still carries
+python subject_identity_probe.py
+
+# ExpCLR against its baselines, under the folds the rest of the pipeline uses.
+# The baselines are what makes the result falsifiable: B0 predicts the training mean,
+# B1 regresses the descriptor directly and B2 reads out an untrained encoder.
+python run_expclr_folds.py --methods ExpCLR B0 B1 B2 --n_folds 10 --epochs 50
+
+# Staged hyperparameter search for ExpCLR: target scale, then learning rate, then temperature
+python tune_expclr.py --descriptor P_madurativo --quick
+
+# Sidecar configs for checkpoints trained before sidecars existed
+python backfill_sidecars.py
+```
+
 ---
 
 ## License
 
-MIT — Jaime Castillo Ucles, 2025.
+MIT — Jaime Castillo Uclés, 2025; Julián Tinjacá Reyes, 2026.

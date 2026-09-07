@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from loss import StandardNormalPrior
+
 class CNNAutoencoder(nn.Module):
     def __init__(self, input_size, hidden_size, n_channels=2, dropout=0.25):
         super().__init__()
@@ -57,7 +59,7 @@ class CNNAutoencoder(nn.Module):
             x = x.unsqueeze(1)  # -> (B, 1, C, T)
             encoded = self.encoder(x)  # -> (B, H, 1, T')
             pooled = F.adaptive_avg_pool2d(encoded, (1, 1))  # -> (B, H, 1, 1)
-            return pooled.view(pooled.size(0), -1)  # -> (B, H)
+            return pooled.reshape(pooled.size(0), -1)
 
 
 class AttentionLSTMAutoencoder(nn.Module):
@@ -137,7 +139,7 @@ class AttentionLSTMAutoencoder(nn.Module):
         x = x.unsqueeze(1)  # (B, 1, C, T)
         x = self.encoder_cnn(x)  # (B, H, 1, T')
         x = x.squeeze(2)         # (B, H, T')
-        x = x.permute(0, 2, 1)   # (B, T', H)
+        x = x.permute(0, 2, 1).contiguous()
 
         lstm_out, _ = self.encoder_lstm(x)  # (B, T', 2*LSTM_H)
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
@@ -148,7 +150,7 @@ class AttentionLSTMAutoencoder(nn.Module):
         x, _ = self.decoder_lstm(embedding)  # (B, T', 2*LSTM_H)
         x = self.reconstruction_layer(x)     # (B, T', H)
 
-        x = x.permute(0, 2, 1).unsqueeze(2)  # (B, H, 1, T')
+        x = x.permute(0, 2, 1).contiguous().unsqueeze(2)
         x = self.decoder_deconv(x)           # (B, C, ?, T)
         x = x.squeeze(2)                     # (B, C, T)
         return x
@@ -321,7 +323,7 @@ class MaskedAttentionLSTMAutoencoder(nn.Module):
         x = x.unsqueeze(1)  # (B, 1, C, T)
         x = self.encoder_cnn(x)  # (B, H, 1, T')
         x = x.squeeze(2)         # (B, H, T')
-        x = x.permute(0, 2, 1)   # (B, T', H)
+        x = x.permute(0, 2, 1).contiguous()
 
         lstm_out, _ = self.encoder_lstm(x)  # (B, T', 2*LSTM_H)
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
@@ -332,7 +334,7 @@ class MaskedAttentionLSTMAutoencoder(nn.Module):
         x, _ = self.decoder_lstm(embedding)  # (B, T', 2*LSTM_H)
         x = self.reconstruction_layer(x)     # (B, T', H)
 
-        x = x.permute(0, 2, 1).unsqueeze(2)  # (B, H, 1, T')
+        x = x.permute(0, 2, 1).contiguous().unsqueeze(2)
         x = self.decoder_deconv(x)           # (B, C, ?, T)
         x = x.squeeze(2)                     # (B, C, T)
         return x
@@ -446,7 +448,7 @@ class EnhancedAttentionLSTM(nn.Module):
         # Reshape for LSTM: (batch, time, channels)
         # Remove the redundant spatial dimension and permute
         x = x.squeeze(2)  # Remove the spatial dimension that was reduced to 1
-        x = x.permute(0, 2, 1)  # (batch, time, channels)
+        x = x.permute(0, 2, 1).contiguous()
 
         # LSTM layer
         lstm_out, _ = self.lstm(x)
@@ -469,3 +471,79 @@ class EnhancedAttentionLSTM(nn.Module):
         """
         embedding = self.get_embedding(x)
         return self.projection(embedding)
+
+
+class VariationalAttentionLSTMAutoencoder(nn.Module):
+    """VAE over the shared encoder: pooled h -> (mu, logvar) -> z -> decoder.
+
+    The encoder emits log-variance, the latent is one vector per window, and
+    the downstream embedding is mu.
+
+    Args:
+        input_size (int): Window length in samples (only 1250 works).
+        hidden_size (int): Encoder width.
+        latent_dim (int | None): Latent size; defaults to hidden_size.
+        prior (LatentPrior | None): Defaults to StandardNormalPrior.
+    """
+
+    def __init__(self, input_size, hidden_size, n_channels=2, sfreq=100,
+                 lstm_hidden_size=64, lstm_layers=2, n_attention_heads=4,
+                 dropout=0.25, latent_dim=None, prior=None):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.latent_dim = latent_dim if latent_dim is not None else hidden_size
+
+        self.backbone = AttentionLSTMAutoencoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            n_channels=n_channels,
+            sfreq=sfreq,
+            lstm_hidden_size=lstm_hidden_size,
+            lstm_layers=lstm_layers,
+            n_attention_heads=n_attention_heads,
+            dropout=dropout,
+        )
+
+        self.fc_mu = nn.Linear(hidden_size, self.latent_dim)
+        self.fc_logvar = nn.Linear(hidden_size, self.latent_dim)
+        self.fc_expand = nn.Linear(self.latent_dim, hidden_size)
+
+        self.prior = prior if prior is not None else StandardNormalPrior()
+
+    def _pool_encode(self, x):
+        """Encodes and pools over time, returning (h, t_prime)."""
+        h_seq = self.backbone.encode(x)
+        h = h_seq.mean(dim=1)
+        return h, h_seq.size(1)
+
+    def encode_params(self, x):
+        """Returns (mu, logvar, t_prime); logvar is a log-variance."""
+        h, t_prime = self._pool_encode(x)
+        # Clamp keeps exp(logvar) finite; the range is far wider than any
+        # useful posterior variance, so it only guards against blow-ups.
+        logvar = torch.clamp(self.fc_logvar(h), min=-10.0, max=10.0)
+        return self.fc_mu(h), logvar, t_prime
+
+    def reparameterize(self, mu, logvar):
+        """Draws z = mu + exp(0.5 * logvar) * eps, one sample."""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + std * eps
+
+    def forward(self, x):
+        """Returns (reconstruction, mu, logvar, z); z is repeated over time."""
+        mu, logvar, t_prime = self.encode_params(x)
+        z = self.reparameterize(mu, logvar)
+        z_seq = self.fc_expand(z).unsqueeze(1).repeat(1, t_prime, 1)
+        reconstruction = self.backbone.decode(z_seq)
+        return reconstruction, mu, logvar, z
+
+    def get_embedding(self, x):
+        """Returns the posterior mean, never sampled, used downstream."""
+        h, _ = self._pool_encode(x)
+        return self.fc_mu(h)
+
+    def kl(self, mu, logvar, free_bits=0.0):
+        """Returns the objective KL; use prior.kl_true to report it."""
+        return self.prior.kl_divergence(mu, logvar, free_bits=free_bits)

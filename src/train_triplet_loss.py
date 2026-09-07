@@ -10,6 +10,9 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
+from checkpoint_naming import triplet_checkpoint_name, write_sidecar
+from window_loading import NORM_PROVENANCE, load_windows
+from utils import set_seed
 from models import EnhancedAttentionLSTM
 
 class TripletDataset(Dataset):
@@ -62,18 +65,18 @@ class TripletDataset(Dataset):
         return anchor_sample, positive_sample, negative_sample
 
 def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Usando dispositivo: {device}")
 
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.plot_dir, exist_ok=True)
 
     # --- Data loading ---
-    data_path = os.path.join(args.data_path, "processed_windows.npy")
-    meta_path = os.path.join(args.data_path, "processed_metadata.csv")
-
-    X = np.load(data_path)
-    meta_df = pd.read_csv(meta_path)
+    # Normalisation statistics are refitted without the held-out subjects, so the
+    # transform applied to the training windows never saw them.
+    X, meta_df = load_windows(
+        args.data_path, fit_stats_excluding=args.exclude_subjects
+    )
 
     # --- Exclude subjects for the test set ---
     if args.exclude_subjects:
@@ -114,7 +117,8 @@ def main(args):
 
     # --- Dataset and DataLoader ---
     dataset = TripletDataset(X, y)
-    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+                              generator=torch.Generator().manual_seed(args.seed))
 
     # --- Model, Optimizer and Loss ---
     model = EnhancedAttentionLSTM(
@@ -185,14 +189,26 @@ def main(args):
 
 
     # --- Save model ---
-    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
-    model_filename = (
-        f"Triplet_{args.target}_{args.zone}_{args.frequency}{fold_suffix}_"
-        f"emb{args.embedding_size}_m{args.margin}.pth"
+    model_filename = triplet_checkpoint_name(
+        args.target, args.zone, args.frequency, args.fold_id,
+        embedding_size=args.embedding_size, margin=args.margin,
     )
     model_path = os.path.join(args.save_dir, model_filename)
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to: {model_path}")
+    write_sidecar(model_path, {
+        "method": "TripletLoss",
+        "target": args.target,
+        "zone": args.zone,
+        "frequency": args.frequency,
+        "fold_id": args.fold_id,
+        "exclude_subjects": sorted(str(s) for s in (args.exclude_subjects or [])),
+        "norm_stats": NORM_PROVENANCE,
+        "seed": getattr(args, "seed", None),
+        "embedding_size": args.embedding_size,
+        "margin": args.margin,
+        "n_windows": int(len(X)),
+    })
 
     # --- Loss curve plot ---
     plt.figure()
@@ -203,6 +219,7 @@ def main(args):
     plt.grid(True)
     plt.tight_layout()
 
+    fold_suffix = f"_{args.fold_id}" if args.fold_id else ""
     plot_filename = f"Triplet_{args.target}_{args.zone}_{args.frequency}{fold_suffix}_loss_curve.png"
     plot_path = os.path.join(args.plot_dir, plot_filename)
     plt.savefig(plot_path)
@@ -313,5 +330,12 @@ if __name__ == "__main__":
         help="Fold identifier to include in model filename (e.g., 'fold0')."
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for weights, shuffling and augmentations."
+    )
     args = parser.parse_args()
+    set_seed(args.seed)
     main(args)

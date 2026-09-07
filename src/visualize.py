@@ -22,7 +22,7 @@ def explained_variance(embeddings):
     # Calcular PCA
     print(embeddings.shape)
     n_components = embeddings.shape[1]  # Todas las dimensiones
-    pca = PCA(n_components=n_components)
+    pca = PCA(n_components=n_components, random_state=42)
     pca.fit(embeddings)
     explained_var = pca.explained_variance_ratio_
 
@@ -130,7 +130,7 @@ def main():
 
     # ----------------------------- #
     # PCA
-    pca = PCA(n_components=2)
+    pca = PCA(n_components=2, random_state=42)
     pca_results = pca.fit_transform(embeddings)
 
     df_pca = pd.DataFrame({
@@ -178,7 +178,7 @@ def main():
 
     collapse_check(embeddings)
 
-    pca = PCA(n_components=3)
+    pca = PCA(n_components=3, random_state=42)
     pca_3d = pca.fit_transform(embeddings)
 
     print("Visualizando PCA 3D por edad")
